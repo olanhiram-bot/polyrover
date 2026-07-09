@@ -1,12 +1,12 @@
-# Poñyrover
+# polyrover
 
 **The safer Polymarket CLI for research, agents, and automation.**
 
 `polyrover` is a Rust command-line tool and library for exploring Polymarket data without putting a wallet in the blast radius. It speaks Gamma, CLOB, public Data APIs, analytics, local simulation, and stream foundations — but it does not place live orders.
 
-If the official [`polymarket-cli`](https://github.com/Polymarket/polymarket-cli) is a trading terminal, Poñyrover is the scout you send ahead first.
+If the official [`polymarket-cli`](https://github.com/Polymarket/polymarket-cli) is a trading terminal, polyrover is the scout you send ahead first.
 
-## Why use Poñyrover?
+## Why use polyrover?
 
 - **Read-only by default** — browse markets, inspect books, fetch analytics, and simulate fills without configuring a private key.
 - **Agent-friendly JSON** — responses use the same `{ ok, version, data | error, meta }` shape for scripts and LLM tools.
@@ -14,9 +14,9 @@ If the official [`polymarket-cli`](https://github.com/Polymarket/polymarket-cli)
 - **No accidental live trading path** — order, bridge, auth, and wallet surfaces are modeled carefully, but live signing, private-key import/storage, relayers, and order submission are deliberately excluded for now.
 - **Simple commands** — no shell wizard needed before your first query.
 
-## Poñyrover vs. `polymarket-cli`
+## polyrover vs. `polymarket-cli`
 
-| Need | Use Poñyrover | Use `polymarket-cli` |
+| Need | Use polyrover | Use `polymarket-cli` |
 | --- | --- | --- |
 | Research markets without a wallet | ✅ | ✅ |
 | JSON for bots/agents | ✅ consistent envelope | ✅ `-o json` |
@@ -27,7 +27,7 @@ If the official [`polymarket-cli`](https://github.com/Polymarket/polymarket-cli)
 | Place/cancel live orders | ❌ intentionally absent | ✅ |
 | Wallet setup, approvals, CTF, bridge | ❌ dry-run/DTO/readiness only | ✅ |
 
-**Short version:** choose Poñyrover when the job is *observe, analyze, simulate, automate safely*. Choose `polymarket-cli` when you intentionally need a full trading wallet workflow.
+**Short version:** choose polyrover when the job is *observe, analyze, simulate, automate safely*. Choose `polymarket-cli` when you intentionally need a full trading wallet workflow.
 
 ## Install
 
@@ -83,7 +83,7 @@ polyrover sim sell --token-id <TOKEN_ID> --price 0.48 --size 10 --json
 
 ## Output shape
 
-Poñyrover is meant to be boring to parse. `version` is the JSON contract version, not the Cargo package version:
+polyrover is meant to be boring to parse. `version` is the JSON contract version, not the Cargo package version:
 
 ```json
 {
@@ -102,7 +102,7 @@ Simulation and paper fills are estimates for research. Live execution can diverg
 
 ## Safety model
 
-Poñyrover is intentionally conservative:
+polyrover is intentionally conservative:
 
 - no live order placement;
 - no live cancel path;
@@ -149,7 +149,7 @@ Commands:
 
 ## Who this is for
 
-Use Poñyrover if you are building:
+Use polyrover if you are building:
 
 - research notebooks;
 - market scanners;
