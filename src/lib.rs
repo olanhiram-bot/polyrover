@@ -1,0 +1,25 @@
+pub mod auth;
+pub mod bridge;
+pub mod capabilities;
+pub mod clob;
+pub mod clob_orders;
+pub mod config;
+pub mod data;
+pub mod data_types;
+pub mod error;
+pub mod gamma;
+pub mod intel;
+pub mod jsonx;
+pub mod market_data;
+pub mod market_resolver;
+pub mod output;
+pub mod paper;
+pub mod simulation;
+pub mod stream;
+pub mod stream_client;
+pub mod transport;
+pub mod types;
+pub mod user_stream;
+pub mod wallet;
+
+pub use error::{Error, Result};

@@ -1,0 +1,24 @@
+[package]
+name = "polyrover"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+hmac = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+sha2 = "0.10"
+sha3 = "0.10"
+tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+
+[lib]
+name = "polyrover"
+path = "src/lib.rs"
+
+[[bin]]
+name = "polyrover"
+path = "src/main.rs"
