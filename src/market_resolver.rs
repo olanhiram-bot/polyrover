@@ -20,6 +20,96 @@ pub struct Candidate {
     pub token_ids: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CryptoMarket {
+    pub id: String,
+    pub condition_id: String,
+    pub asset: String,
+    pub timeframe: String,
+    pub slug: String,
+    pub question: String,
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub active: bool,
+    pub closed: bool,
+    pub accepting: bool,
+    pub up_token_id: String,
+    pub down_token_id: String,
+}
+
+pub fn discover_window_markets(
+    client: &crate::Client,
+    assets: &[String],
+    start: DateTime<Utc>,
+    through: DateTime<Utc>,
+) -> crate::Result<Vec<CryptoMarket>> {
+    if start > through {
+        return Ok(Vec::new());
+    }
+    let mut targets = std::collections::BTreeMap::new();
+    let mut window = start;
+    while window <= through {
+        for asset in assets {
+            let slug = crypto_window_slug(asset, "5m", window);
+            if !slug.is_empty() {
+                targets.insert(slug, (asset.trim().to_ascii_uppercase(), window));
+            }
+        }
+        window += Duration::minutes(5);
+    }
+    let rows = client.markets(&crate::gamma::MarketParams {
+        slug: targets.keys().cloned().collect(),
+        active: Some(true),
+        closed: Some(false),
+        ..Default::default()
+    })?;
+    let mut markets = rows
+        .into_iter()
+        .filter_map(|row| {
+            let (asset, fallback_start) = targets.get(row.slug.trim())?;
+            let condition_id = row.condition_id.trim();
+            if condition_id.is_empty() {
+                return None;
+            }
+            let tokens = parse_token_ids(&row.clob_token_ids);
+            let (mut up_token_id, mut down_token_id) = up_down_token_ids(&row.outcomes.0, &tokens);
+            if (up_token_id.is_empty() || down_token_id.is_empty()) && tokens.len() >= 2 {
+                up_token_id = tokens[0].clone();
+                down_token_id = tokens[1].clone();
+            }
+            if up_token_id.is_empty() || down_token_id.is_empty() {
+                return None;
+            }
+            let (window_start, window_end) = window_from_slug(&row.slug, "5m")
+                .unwrap_or((*fallback_start, *fallback_start + Duration::minutes(5)));
+            Some(CryptoMarket {
+                id: row.id,
+                condition_id: condition_id.into(),
+                asset: asset.clone(),
+                timeframe: "5m".into(),
+                slug: row.slug,
+                question: row.question,
+                start_time: Some(window_start),
+                end_time: Some(window_end),
+                active: row.active,
+                closed: row.closed,
+                accepting: row.active && !row.closed,
+                up_token_id,
+                down_token_id,
+            })
+        })
+        .collect::<Vec<_>>();
+    markets.sort_by(|left, right| {
+        (left.start_time, &left.asset, &left.condition_id).cmp(&(
+            right.start_time,
+            &right.asset,
+            &right.condition_id,
+        ))
+    });
+    markets.dedup_by(|left, right| left.condition_id == right.condition_id);
+    Ok(markets)
+}
+
 pub fn normalize_outcome(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "up" => OUTCOME_UP,
@@ -247,6 +337,49 @@ fn matches_interval(event: &Event, market: &Market, interval: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn discover_window_markets_resolves_gamma_tokens() -> crate::Result<()> {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            thread,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            let read = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..read]);
+            assert!(request.contains("slug=btc-updown-5m-1700000100"));
+            let body = r#"[{"id":"gamma-1","conditionId":"condition-1","slug":"btc-updown-5m-1700000100","question":"Bitcoin Up or Down","active":true,"closed":false,"outcomes":["Up","Down"],"clobTokenIds":"[\"up\",\"down\"]"}]"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .unwrap();
+        });
+        let base = format!("http://{address}");
+        let client = crate::Client::new(crate::ClientConfig {
+            gamma_base_url: base.clone(),
+            clob_base_url: base.clone(),
+            data_base_url: base,
+        })?;
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let rows = discover_window_markets(&client, &["BTC".into()], start, start)?;
+        server.join().unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].condition_id, "condition-1");
+        assert_eq!(rows[0].up_token_id, "up");
+        assert_eq!(rows[0].down_token_id, "down");
+        assert_eq!(rows[0].timeframe, "5m");
+        Ok(())
+    }
 
     #[test]
     fn maps_up_down_tokens_and_outcome() {
