@@ -8,6 +8,7 @@ pub enum Error {
     Json(serde_json::Error),
     Url(String),
     Api { status: u16, body: String },
+    RateLimited { retry_after_secs: Option<u64> },
     Invalid(String),
 }
 
@@ -18,6 +19,10 @@ impl fmt::Display for Error {
             Self::Json(err) => write!(f, "json error: {err}"),
             Self::Url(msg) | Self::Invalid(msg) => f.write_str(msg),
             Self::Api { status, body } => write!(f, "api error {status}: {body}"),
+            Self::RateLimited { retry_after_secs } => match retry_after_secs {
+                Some(seconds) => write!(f, "api rate limited; retry after {seconds}s"),
+                None => f.write_str("api rate limited"),
+            },
         }
     }
 }

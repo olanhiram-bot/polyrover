@@ -17,9 +17,10 @@ Source: `../polygolem` (Go 1.25 module `github.com/TrebuchetDynamics/polygolem`)
 11. Add public WebSocket ping/reconnect helpers. ✅
 12. Add bridge dry-run/DTOs and CLOB order/cancel DTOs. ✅
 13. Add offline wallet address derivation/readiness helpers. ✅
-14. Expand full async WebSocket IO loop/typed callback parity.
-4. Only after parity tests: authenticated CLOB reads.
-5. Last, with explicit owner approval: signing, wallet, relayer, bridge, and live order paths.
+14. Add typed public market events, including market lifecycle events. ✅
+15. Expand full async WebSocket callback/reconnect parity.
+16. Only after parity tests: authenticated CLOB reads.
+17. Last, with explicit owner approval: signing, wallet, relayer, bridge, and live order paths.
 
 ## First slice shipped here
 
@@ -36,12 +37,13 @@ Source: `../polygolem` (Go 1.25 module `github.com/TrebuchetDynamics/polygolem`)
 - `src/market_data.rs`: stream event to latest per-token snapshot tracker.
 - `src/capabilities.rs`: surface metadata and read-only/secret gate classification.
 - `src/intel.rs`: pure wallet shrinkage/ROI/scoring helpers.
-- `src/stream_client.rs`: minimal public market WebSocket connect/subscribe/read wrapper using stream DTOs, plus ping/reconnect helpers.
+- `src/stream_client.rs`: public market WebSocket connect/subscribe/raw-or-typed read wrapper using stream DTOs, plus ping/reconnect helpers.
 - `src/auth.rs`: CLOB L2 HMAC signing/header helpers with redaction support.
 - `src/user_stream.rs`: authenticated user stream DTOs, payload builder, parser, and minimal client wrapper.
 - `src/bridge.rs`: Bridge API DTOs plus unsupported withdrawal dry-run safety guard.
 - `src/clob_orders.rs`: CLOB order/cancel/record DTOs for authenticated order surfaces, without submit methods.
 - `src/wallet.rs`: offline wallet readiness and deterministic proxy/safe/deposit-wallet address derivation helpers.
+- `src/stream.rs`: typed decoding for book, price, trade, tick, top-of-book, new-market, and resolved-market events.
 
 ## Deliberately not ported yet
 

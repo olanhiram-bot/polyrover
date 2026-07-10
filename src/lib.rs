@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod bridge;
 pub mod capabilities;
+mod client;
 pub mod clob;
 pub mod clob_orders;
 pub mod config;
@@ -22,4 +23,5 @@ pub mod types;
 pub mod user_stream;
 pub mod wallet;
 
+pub use client::{Client, ClientConfig, ClientHealth};
 pub use error::{Error, Result};

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     gamma,
@@ -76,6 +76,18 @@ impl Client {
             .get_json(&format!("/book?token_id={}", escape(token_id)))
     }
 
+    pub fn order_books(&self, token_ids: &[String]) -> Result<Vec<ClobOrderBook>> {
+        let params = token_ids
+            .iter()
+            .filter(|token_id| !token_id.trim().is_empty())
+            .map(|token_id| BookParam { token_id })
+            .collect::<Vec<_>>();
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.transport.post_json("/books", &params)
+    }
+
     pub fn price(&self, token_id: &str, side: &str) -> Result<String> {
         let row: PriceResponse = self.transport.get_json(&format!(
             "/price?token_id={}&side={}",
@@ -113,6 +125,11 @@ impl Client {
         self.transport
             .get_json(&cursor_path("/simplified-markets", next_cursor))
     }
+}
+
+#[derive(Serialize)]
+struct BookParam<'a> {
+    token_id: &'a str,
 }
 
 #[derive(Deserialize)]

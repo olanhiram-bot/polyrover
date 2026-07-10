@@ -1,4 +1,4 @@
-use polyrover::{clob, data, gamma, output, paper, simulation, Result};
+use polyrover::{gamma, output, paper, simulation, Client, ClientConfig, Result};
 use serde_json::json;
 
 fn main() {
@@ -12,6 +12,7 @@ fn main() {
 
 fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--json").collect();
+    let client = Client::new(ClientConfig::default())?;
     match args.as_slice() {
         [] => {
             print_help();
@@ -21,18 +22,26 @@ fn run() -> Result<()> {
             print_help();
             Ok(())
         }
-        [cmd] if cmd == "ping" => ping(),
-        [group, cmd, rest @ ..] if group == "gamma" && cmd == "search" => gamma_search(rest),
-        [group, cmd, rest @ ..] if group == "gamma" && cmd == "markets" => gamma_markets(rest),
-        [group, cmd, rest @ ..] if group == "clob" && cmd == "book" => clob_book(rest),
-        [group, cmd, rest @ ..] if group == "clob" && cmd == "price" => clob_price(rest),
-        [group, cmd, rest @ ..] if group == "clob" && cmd == "simulate" => clob_simulate(rest),
-        [group, cmd, rest @ ..] if group == "analytics" && cmd == "positions" => {
-            data_positions(rest)
+        [cmd] if cmd == "ping" => ping(&client),
+        [group, cmd, rest @ ..] if group == "gamma" && cmd == "search" => {
+            gamma_search(&client, rest)
         }
-        [group, cmd, rest @ ..] if group == "analytics" && cmd == "trades" => data_trades(rest),
+        [group, cmd, rest @ ..] if group == "gamma" && cmd == "markets" => {
+            gamma_markets(&client, rest)
+        }
+        [group, cmd, rest @ ..] if group == "clob" && cmd == "book" => clob_book(&client, rest),
+        [group, cmd, rest @ ..] if group == "clob" && cmd == "price" => clob_price(&client, rest),
+        [group, cmd, rest @ ..] if group == "clob" && cmd == "simulate" => {
+            clob_simulate(&client, rest)
+        }
+        [group, cmd, rest @ ..] if group == "analytics" && cmd == "positions" => {
+            data_positions(&client, rest)
+        }
+        [group, cmd, rest @ ..] if group == "analytics" && cmd == "trades" => {
+            data_trades(&client, rest)
+        }
         [group, cmd, rest @ ..] if group == "analytics" && cmd == "leaderboard" => {
-            data_leaderboard(rest)
+            data_leaderboard(&client, rest)
         }
         [group, cmd, rest @ ..] if group == "sim" && cmd == "reset" => sim_reset(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "buy" => sim_buy(rest),
@@ -44,18 +53,13 @@ fn run() -> Result<()> {
     }
 }
 
-fn ping() -> Result<()> {
-    let gamma = gamma::Client::new("")?;
-    let clob = clob::Client::new("")?;
-    let g = gamma.health_check().map(|_| "ok").unwrap_or("error");
-    let c = clob.health().map(|_| "ok").unwrap_or("error");
-    print_success("ping", json!({"gamma": g, "clob": c}))
+fn ping(client: &Client) -> Result<()> {
+    print_success("ping", client.health())
 }
 
-fn gamma_search(args: &[String]) -> Result<()> {
+fn gamma_search(client: &Client, args: &[String]) -> Result<()> {
     let query = flag(args, "--query").unwrap_or_default();
     let limit = flag(args, "--limit").and_then(|v| v.parse().ok());
-    let client = gamma::Client::new("")?;
     print_success(
         "gamma search",
         client.search(&gamma::SearchParams {
@@ -66,9 +70,8 @@ fn gamma_search(args: &[String]) -> Result<()> {
     )
 }
 
-fn gamma_markets(args: &[String]) -> Result<()> {
+fn gamma_markets(client: &Client, args: &[String]) -> Result<()> {
     let limit = flag(args, "--limit").and_then(|v| v.parse().ok());
-    let client = gamma::Client::new("")?;
     print_success(
         "gamma markets",
         client.markets(&gamma::MarketParams {
@@ -78,68 +81,58 @@ fn gamma_markets(args: &[String]) -> Result<()> {
     )
 }
 
-fn clob_book(args: &[String]) -> Result<()> {
+fn clob_book(client: &Client, args: &[String]) -> Result<()> {
     let token = flag(args, "--token-id").unwrap_or_default();
-    let client = clob::Client::new("")?;
     print_success("clob book", client.order_book(&token)?)
 }
 
-fn clob_price(args: &[String]) -> Result<()> {
+fn clob_price(client: &Client, args: &[String]) -> Result<()> {
     let token = flag(args, "--token-id").unwrap_or_default();
     let side = flag(args, "--side").unwrap_or_else(|| "buy".into());
-    let client = clob::Client::new("")?;
     print_success("clob price", json!({"price": client.price(&token, &side)?}))
 }
 
-fn clob_simulate(args: &[String]) -> Result<()> {
+fn clob_simulate(client: &Client, args: &[String]) -> Result<()> {
     let token = flag(args, "--token")
         .or_else(|| flag(args, "--token-id"))
         .unwrap_or_default();
     let side = flag(args, "--side").unwrap_or_else(|| "buy".into());
     let amount = flag(args, "--amount").unwrap_or_default();
     let limit_price = flag(args, "--limit-price").unwrap_or_default();
-    let client = clob::Client::new("")?;
-    let book = client.order_book(&token)?;
     print_success(
         "clob simulate",
-        simulation::simulate_book(
-            &book,
-            simulation::Request {
-                token_id: token,
-                side,
-                amount,
-                limit_price,
-            },
-        )?,
+        client.simulate(simulation::Request {
+            token_id: token,
+            side,
+            amount,
+            limit_price,
+        })?,
     )
 }
 
-fn data_positions(args: &[String]) -> Result<()> {
+fn data_positions(client: &Client, args: &[String]) -> Result<()> {
     let user = flag(args, "--user").unwrap_or_default();
     let limit = flag(args, "--limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(20);
-    let client = data::Client::new("")?;
     print_success(
         "analytics positions",
         client.current_positions(&user, limit)?,
     )
 }
 
-fn data_trades(args: &[String]) -> Result<()> {
+fn data_trades(client: &Client, args: &[String]) -> Result<()> {
     let user = flag(args, "--user").unwrap_or_default();
     let limit = flag(args, "--limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(20);
-    let client = data::Client::new("")?;
     print_success("analytics trades", client.trades(&user, limit)?)
 }
 
-fn data_leaderboard(args: &[String]) -> Result<()> {
+fn data_leaderboard(client: &Client, args: &[String]) -> Result<()> {
     let limit = flag(args, "--limit")
         .and_then(|v| v.parse().ok())
         .unwrap_or(20);
-    let client = data::Client::new("")?;
     print_success("analytics leaderboard", client.trader_leaderboard(limit)?)
 }
 

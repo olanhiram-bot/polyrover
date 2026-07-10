@@ -137,11 +137,12 @@ Commands:
 
 `polyrover` also exposes source modules for:
 
+- `Client` and `ClientConfig` as the unified read-only entry point for common Gamma, CLOB, Data, health, and fill-simulation operations;
 - `gamma` and `clob` read clients;
 - `data` public Data API access;
 - `simulation` CLOB book walking and fill estimates;
 - `paper` local paper state;
-- `stream` and `stream_client` market stream foundations;
+- `stream` and `stream_client` raw and typed market streams, including lifecycle events;
 - `market_resolver` and `market_data` helpers;
 - `capabilities` and `intel` scoring metadata;
 - `user_stream` payload parsing;

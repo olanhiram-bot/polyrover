@@ -36,12 +36,14 @@ impl Default for Config {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct PriceLevel {
     pub price: String,
     pub size: String,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct BookMessage {
     pub event_type: String,
     pub asset_id: String,
@@ -55,6 +57,7 @@ pub struct BookMessage {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct PriceChangeMessage {
     pub event_type: String,
     pub market: String,
@@ -64,6 +67,7 @@ pub struct PriceChangeMessage {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct PriceChangeEntry {
     pub asset_id: String,
     pub price: String,
@@ -77,6 +81,7 @@ pub struct PriceChangeEntry {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct LastTradeMessage {
     pub event_type: String,
     pub asset_id: String,
@@ -91,6 +96,7 @@ pub struct LastTradeMessage {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct TickSizeChangeMessage {
     pub event_type: String,
     pub asset_id: String,
@@ -101,6 +107,7 @@ pub struct TickSizeChangeMessage {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
 pub struct BestBidAskMessage {
     pub event_type: String,
     pub asset_id: String,
@@ -109,6 +116,60 @@ pub struct BestBidAskMessage {
     pub best_ask: String,
     pub spread: String,
     pub timestamp: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct NewMarketMessage {
+    pub event_type: String,
+    pub id: String,
+    pub question: String,
+    pub market: String,
+    pub slug: String,
+    pub description: String,
+    #[serde(rename = "assets_ids")]
+    pub asset_ids: Vec<String>,
+    pub outcomes: Vec<String>,
+    pub event_message: HashMap<String, Value>,
+    pub timestamp: String,
+    pub tags: Vec<String>,
+    pub condition_id: String,
+    pub clob_token_ids: Vec<String>,
+    pub active: bool,
+    pub sports_market_type: String,
+    pub line: String,
+    pub game_start_time: String,
+    pub order_price_min_tick_size: String,
+    pub group_item_title: String,
+    pub taker_base_fee: String,
+    pub fees_enabled: bool,
+    pub fee_schedule: HashMap<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(default)]
+pub struct MarketResolvedMessage {
+    pub event_type: String,
+    pub id: String,
+    pub market: String,
+    #[serde(rename = "assets_ids")]
+    pub asset_ids: Vec<String>,
+    pub winning_asset_id: String,
+    pub winning_outcome: String,
+    pub timestamp: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MarketEvent {
+    Book(BookMessage),
+    PriceChange(PriceChangeMessage),
+    LastTrade(LastTradeMessage),
+    TickSizeChange(TickSizeChangeMessage),
+    BestBidAsk(BestBidAskMessage),
+    NewMarket(Box<NewMarketMessage>),
+    MarketResolved(MarketResolvedMessage),
+    Ignored,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -254,6 +315,26 @@ impl Deduplicator {
                 .unwrap();
             self.seen.remove(&oldest);
         }
+    }
+}
+
+pub fn parse_market_event(text: &str) -> Result<MarketEvent> {
+    let value: Value = serde_json::from_str(text)?;
+    match value
+        .get("event_type")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+    {
+        "book" => Ok(MarketEvent::Book(serde_json::from_value(value)?)),
+        "price_change" => Ok(MarketEvent::PriceChange(serde_json::from_value(value)?)),
+        "last_trade_price" => Ok(MarketEvent::LastTrade(serde_json::from_value(value)?)),
+        "tick_size_change" => Ok(MarketEvent::TickSizeChange(serde_json::from_value(value)?)),
+        "best_bid_ask" => Ok(MarketEvent::BestBidAsk(serde_json::from_value(value)?)),
+        "new_market" => Ok(MarketEvent::NewMarket(Box::new(serde_json::from_value(
+            value,
+        )?))),
+        "market_resolved" => Ok(MarketEvent::MarketResolved(serde_json::from_value(value)?)),
+        _ => Ok(MarketEvent::Ignored),
     }
 }
 
