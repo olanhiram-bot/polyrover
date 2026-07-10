@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::stream::{
-    BestBidAskMessage, BookMessage, LastTradeMessage, PriceChangeEntry, PriceChangeMessage,
-    PriceLevel, TickSizeChangeMessage,
+    BestBidAskMessage, BookMessage, LastTradeMessage, MarketEvent, PriceChangeEntry,
+    PriceChangeMessage, PriceLevel, TickSizeChangeMessage,
 };
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -49,6 +49,150 @@ pub struct Snapshot {
     pub asks: Vec<Level>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Liquidity {
+    pub market_id: String,
+    pub asset_id: String,
+    pub bid_size: f64,
+    pub ask_size: f64,
+    pub imbalance: f64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Depth {
+    pub market_id: String,
+    pub asset_id: String,
+    pub total_bid: f64,
+    pub total_ask: f64,
+    pub bid_depth_1c: f64,
+    pub bid_depth_2c: f64,
+    pub bid_depth_5c: f64,
+    pub ask_depth_1c: f64,
+    pub ask_depth_2c: f64,
+    pub ask_depth_5c: f64,
+}
+
+impl Snapshot {
+    pub fn liquidity(&self) -> Liquidity {
+        let bid = self
+            .bids
+            .first()
+            .map_or(0.0, |level| parse_number(&level.size));
+        let ask = self
+            .asks
+            .first()
+            .map_or(0.0, |level| parse_number(&level.size));
+        Liquidity {
+            market_id: self.market.clone(),
+            asset_id: self.asset_id.clone(),
+            bid_size: bid,
+            ask_size: ask,
+            imbalance: if bid + ask == 0.0 {
+                0.0
+            } else {
+                bid / (bid + ask)
+            },
+        }
+    }
+
+    pub fn depth(&self) -> Depth {
+        let mut row = Depth {
+            market_id: self.market.clone(),
+            asset_id: self.asset_id.clone(),
+            ..Default::default()
+        };
+        let best_bid = self
+            .bids
+            .first()
+            .map_or(0.0, |level| parse_number(&level.price));
+        let best_ask = self
+            .asks
+            .first()
+            .map_or(0.0, |level| parse_number(&level.price));
+        for level in &self.bids {
+            let price = parse_number(&level.price);
+            let size = parse_number(&level.size);
+            row.total_bid += size;
+            add_depth(
+                size,
+                best_bid - price,
+                &mut row.bid_depth_1c,
+                &mut row.bid_depth_2c,
+                &mut row.bid_depth_5c,
+            );
+        }
+        for level in &self.asks {
+            let price = parse_number(&level.price);
+            let size = parse_number(&level.size);
+            row.total_ask += size;
+            add_depth(
+                size,
+                price - best_ask,
+                &mut row.ask_depth_1c,
+                &mut row.ask_depth_2c,
+                &mut row.ask_depth_5c,
+            );
+        }
+        row
+    }
+}
+
+fn parse_number(value: &str) -> f64 {
+    value.trim().parse().unwrap_or(0.0)
+}
+
+fn add_depth(size: f64, distance: f64, one: &mut f64, two: &mut f64, five: &mut f64) {
+    if (0.0..=0.010000001).contains(&distance) {
+        *one += size;
+    }
+    if (0.0..=0.020000001).contains(&distance) {
+        *two += size;
+    }
+    if (0.0..=0.050000001).contains(&distance) {
+        *five += size;
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PriceChangeUpdate {
+    pub market: String,
+    pub asset_id: String,
+    pub side: String,
+    pub price: String,
+    pub size: String,
+    pub best_bid: String,
+    pub best_ask: String,
+    pub timestamp: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TradeUpdate {
+    pub market: String,
+    pub asset_id: String,
+    pub price: String,
+    pub side: String,
+    pub size: String,
+    pub timestamp: String,
+    pub transaction_hash: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MarketUpdate {
+    Book(Snapshot),
+    TopOfBook(Snapshot),
+    PriceChanges(Vec<PriceChangeUpdate>),
+    LastTrade(TradeUpdate),
+    TickSizeChange(Snapshot),
+    Ignored,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrackedEvent {
+    pub event: MarketEvent,
+    pub update: MarketUpdate,
+    pub snapshots: Vec<Snapshot>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Tracker {
     snapshots: BTreeMap<String, Snapshot>,
@@ -57,6 +201,68 @@ pub struct Tracker {
 impl Tracker {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn apply_event(&mut self, event: MarketEvent) -> TrackedEvent {
+        let snapshots = match &event {
+            MarketEvent::Book(row) => vec![self.apply_book(row.clone())],
+            MarketEvent::PriceChange(row) => self.apply_price_change(row.clone()),
+            MarketEvent::LastTrade(row) => vec![self.apply_last_trade(row.clone())],
+            MarketEvent::TickSizeChange(row) => vec![self.apply_tick_size_change(row.clone())],
+            MarketEvent::BestBidAsk(row) => vec![self.apply_best_bid_ask(row.clone())],
+            MarketEvent::NewMarket(_) | MarketEvent::MarketResolved(_) | MarketEvent::Ignored => {
+                Vec::new()
+            }
+        };
+        let update = match &event {
+            MarketEvent::Book(_) => snapshots
+                .first()
+                .cloned()
+                .map(MarketUpdate::Book)
+                .unwrap_or(MarketUpdate::Ignored),
+            MarketEvent::BestBidAsk(_) => snapshots
+                .first()
+                .cloned()
+                .map(MarketUpdate::TopOfBook)
+                .unwrap_or(MarketUpdate::Ignored),
+            MarketEvent::PriceChange(row) => MarketUpdate::PriceChanges(
+                row.changes
+                    .iter()
+                    .map(|change| PriceChangeUpdate {
+                        market: row.market.clone(),
+                        asset_id: change.asset_id.clone(),
+                        side: change.side.clone(),
+                        price: change.price.clone(),
+                        size: change.size.clone(),
+                        best_bid: change.best_bid.clone(),
+                        best_ask: change.best_ask.clone(),
+                        timestamp: row.timestamp.clone(),
+                    })
+                    .collect(),
+            ),
+            MarketEvent::LastTrade(row) => MarketUpdate::LastTrade(TradeUpdate {
+                market: row.market.clone(),
+                asset_id: row.asset_id.clone(),
+                price: row.price.clone(),
+                side: row.side.clone(),
+                size: row.size.clone(),
+                timestamp: row.timestamp.clone(),
+                transaction_hash: row.transaction_hash.clone(),
+            }),
+            MarketEvent::TickSizeChange(_) => snapshots
+                .first()
+                .cloned()
+                .map(MarketUpdate::TickSizeChange)
+                .unwrap_or(MarketUpdate::Ignored),
+            MarketEvent::NewMarket(_) | MarketEvent::MarketResolved(_) | MarketEvent::Ignored => {
+                MarketUpdate::Ignored
+            }
+        };
+        TrackedEvent {
+            event,
+            update,
+            snapshots,
+        }
     }
 
     pub fn apply_book(&mut self, msg: BookMessage) -> Snapshot {
@@ -266,6 +472,81 @@ fn first_non_empty(values: &[&str]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tracker_applies_every_typed_market_event() {
+        let mut tracker = Tracker::new();
+        let tracked = tracker.apply_event(crate::stream::MarketEvent::Book(BookMessage {
+            event_type: "book".into(),
+            asset_id: "token-1".into(),
+            market: "market-1".into(),
+            bids: vec![PriceLevel {
+                price: "0.49".into(),
+                size: "10".into(),
+            }],
+            asks: vec![PriceLevel {
+                price: "0.51".into(),
+                size: "20".into(),
+            }],
+            ..Default::default()
+        }));
+        assert_eq!(tracked.snapshots[0].best_bid, "0.49");
+        assert!(matches!(tracked.update, MarketUpdate::Book(_)));
+
+        tracker.apply_event(crate::stream::MarketEvent::LastTrade(LastTradeMessage {
+            asset_id: "token-1".into(),
+            price: "0.50".into(),
+            size: "2".into(),
+            ..Default::default()
+        }));
+        let tracked = tracker.apply_event(crate::stream::MarketEvent::TickSizeChange(
+            TickSizeChangeMessage {
+                asset_id: "token-1".into(),
+                old_tick_size: "0.01".into(),
+                new_tick_size: "0.001".into(),
+                ..Default::default()
+            },
+        ));
+        assert!(matches!(tracked.update, MarketUpdate::TickSizeChange(_)));
+        let snapshot = &tracked.snapshots[0];
+        assert_eq!(snapshot.best_bid, "0.49");
+        assert_eq!(snapshot.last_trade_price, "0.50");
+        assert_eq!(snapshot.tick_size, "0.001");
+    }
+
+    #[test]
+    fn snapshot_projects_liquidity_and_depth_like_polygolem() {
+        let snapshot = Snapshot {
+            market: "market-1".into(),
+            asset_id: "token-1".into(),
+            bids: vec![
+                Level {
+                    price: "0.49".into(),
+                    size: "10".into(),
+                },
+                Level {
+                    price: "0.47".into(),
+                    size: "5".into(),
+                },
+            ],
+            asks: vec![
+                Level {
+                    price: "0.51".into(),
+                    size: "20".into(),
+                },
+                Level {
+                    price: "0.54".into(),
+                    size: "7".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert_eq!(snapshot.liquidity().imbalance, 1.0 / 3.0);
+        let depth = snapshot.depth();
+        assert_eq!((depth.total_bid, depth.total_ask), (15.0, 27.0));
+        assert_eq!((depth.bid_depth_1c, depth.bid_depth_2c), (10.0, 15.0));
+        assert_eq!((depth.ask_depth_2c, depth.ask_depth_5c), (20.0, 27.0));
+    }
 
     #[test]
     fn book_computes_best_bid_ask_and_midpoint() {
