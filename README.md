@@ -143,7 +143,7 @@ Commands:
 - `simulation` CLOB book walking and fill estimates;
 - `paper` local paper state;
 - `stream` and `stream_client` raw and typed market streams, including lifecycle events;
-- `market_resolver` and `market_data` helpers;
+- `market_resolver`, `market_results`, and `market_data` helpers;
 - `capabilities` and `intel` scoring metadata;
 - `user_stream` payload parsing;
 - `bridge`, `clob_orders`, and `wallet` DTO/readiness helpers.

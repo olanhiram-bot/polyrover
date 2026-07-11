@@ -13,6 +13,7 @@ pub mod intel;
 pub mod jsonx;
 pub mod market_data;
 pub mod market_resolver;
+pub mod market_results;
 pub mod output;
 pub mod paper;
 pub mod simulation;

@@ -128,6 +128,8 @@ pub struct Market {
     pub outcome_prices: StringOrArray,
     #[serde(default, alias = "endDate")]
     pub end_date: NormalizedTime,
+    #[serde(default, alias = "closedTime")]
+    pub closed_time: NormalizedTime,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
