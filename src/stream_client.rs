@@ -199,6 +199,9 @@ impl MarketWsClient {
         self.stats.mark_connected();
         self.stats.record_reconnect();
         self.last_ping = Instant::now();
+        if self.subscriptions.is_empty() {
+            return Ok(());
+        }
         let subscriptions = self.subscriptions.clone();
         self.subscribe_assets(&subscriptions)
     }
@@ -530,6 +533,39 @@ mod tests {
         }
         assert_eq!(seen, vec!["h1", "h2"]);
         assert_eq!(client.stats().duplicate_messages, 1);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn reconnect_without_subscriptions_sends_no_subscribe_frame() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let socket = tungstenite::accept(stream).unwrap();
+            drop(socket);
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"new_market","id":"market-1"}"#.into(),
+                ))
+                .unwrap();
+            assert!(matches!(socket.read().unwrap(), Message::Close(_)));
+        });
+        let mut client = MarketWsClient::connect(Config {
+            url: format!("ws://{address}"),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let mut rows = Vec::new();
+        while rows.is_empty() {
+            rows = client.read_raw(1).unwrap();
+        }
+        assert_eq!(rows[0].event_type, "new_market");
+        client.close().unwrap();
         server.join().unwrap();
     }
 
