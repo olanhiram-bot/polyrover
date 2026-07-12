@@ -2,6 +2,8 @@
 name = "polyrover"
 version = "0.1.0"
 edition = "2021"
+description = "Read-only Polymarket CLI and library for research, agents, and automation"
+repository = "https://github.com/TrebuchetDynamics/polyrover"
 
 [dependencies]
 base64 = "0.22"
