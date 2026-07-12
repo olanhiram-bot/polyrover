@@ -65,39 +65,7 @@ pub fn discover_window_markets(
     })?;
     let mut markets = rows
         .into_iter()
-        .filter_map(|row| {
-            let (asset, fallback_start) = targets.get(row.slug.trim())?;
-            let condition_id = row.condition_id.trim();
-            if condition_id.is_empty() {
-                return None;
-            }
-            let tokens = parse_token_ids(&row.clob_token_ids);
-            let (mut up_token_id, mut down_token_id) = up_down_token_ids(&row.outcomes.0, &tokens);
-            if (up_token_id.is_empty() || down_token_id.is_empty()) && tokens.len() >= 2 {
-                up_token_id = tokens[0].clone();
-                down_token_id = tokens[1].clone();
-            }
-            if up_token_id.is_empty() || down_token_id.is_empty() {
-                return None;
-            }
-            let (window_start, window_end) = window_from_slug(&row.slug, "5m")
-                .unwrap_or((*fallback_start, *fallback_start + Duration::minutes(5)));
-            Some(CryptoMarket {
-                id: row.id,
-                condition_id: condition_id.into(),
-                asset: asset.clone(),
-                timeframe: "5m".into(),
-                slug: row.slug,
-                question: row.question,
-                start_time: Some(window_start),
-                end_time: Some(window_end),
-                active: row.active,
-                closed: row.closed,
-                accepting: row.active && !row.closed,
-                up_token_id,
-                down_token_id,
-            })
-        })
+        .filter_map(|row| crypto_market_from_row(row, &targets))
         .collect::<Vec<_>>();
     markets.sort_by(|left, right| {
         (left.start_time, &left.asset, &left.condition_id).cmp(&(
@@ -108,6 +76,164 @@ pub fn discover_window_markets(
     });
     markets.dedup_by(|left, right| left.condition_id == right.condition_id);
     Ok(markets)
+}
+
+pub fn discover_complete_window_markets(
+    client: &crate::Client,
+    assets: &[String],
+    start: DateTime<Utc>,
+    through: DateTime<Utc>,
+) -> crate::Result<Vec<CryptoMarket>> {
+    if assets.is_empty()
+        || start > through
+        || start.timestamp().rem_euclid(300) != 0
+        || through.timestamp().rem_euclid(300) != 0
+    {
+        return Err(crate::Error::Invalid(
+            "invalid complete 5m discovery range or assets".into(),
+        ));
+    }
+    let normalized = assets
+        .iter()
+        .map(|asset| asset.trim().to_ascii_uppercase())
+        .collect::<std::collections::BTreeSet<_>>();
+    if normalized.len() != assets.len() || normalized.iter().any(|asset| asset.is_empty()) {
+        return Err(crate::Error::Invalid(
+            "complete 5m discovery assets must be nonempty and unique".into(),
+        ));
+    }
+
+    let mut targets = std::collections::BTreeMap::new();
+    let mut window = start;
+    while window <= through {
+        for asset in &normalized {
+            let slug = crypto_window_slug(asset, "5m", window);
+            if slug.is_empty() {
+                return Err(crate::Error::Invalid(format!(
+                    "unsupported complete 5m discovery asset {asset}"
+                )));
+            }
+            targets.insert(slug, (asset.clone(), window));
+        }
+        window += Duration::minutes(5);
+    }
+
+    let mut found = discover_window_markets(client, assets, start, through)?
+        .into_iter()
+        .filter(|market| complete_market_valid(market, &targets))
+        .map(|market| (market.slug.clone(), market))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    remove_identity_conflicts(&mut found);
+    let batch_missing = targets
+        .keys()
+        .filter(|slug| !found.contains_key(*slug))
+        .cloned()
+        .collect::<Vec<_>>();
+    for slug in &batch_missing {
+        match client.market_by_slug(slug) {
+            Ok(row) => {
+                if let Some(market) = crypto_market_from_row(row, &targets)
+                    .filter(|market| complete_market_valid(market, &targets))
+                {
+                    found.insert(slug.clone(), market);
+                }
+            }
+            Err(crate::Error::Api { status: 404, .. }) => {}
+            Err(error) => return Err(error),
+        }
+    }
+
+    remove_identity_conflicts(&mut found);
+    let missing = targets
+        .keys()
+        .filter(|slug| !found.contains_key(*slug))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(crate::Error::Invalid(format!(
+            "incomplete 5m market discovery: found {}/{}; missing {}",
+            targets.len() - missing.len(),
+            targets.len(),
+            missing.join(",")
+        )));
+    }
+    let mut markets = found.into_values().collect::<Vec<_>>();
+    markets.sort_by(|left, right| {
+        (left.start_time, &left.asset, &left.condition_id).cmp(&(
+            right.start_time,
+            &right.asset,
+            &right.condition_id,
+        ))
+    });
+    Ok(markets)
+}
+
+fn remove_identity_conflicts(markets: &mut std::collections::BTreeMap<String, CryptoMarket>) {
+    let mut conditions = std::collections::BTreeSet::new();
+    let mut tokens = std::collections::BTreeSet::new();
+    markets.retain(|_, market| {
+        let unique = !conditions.contains(&market.condition_id)
+            && !tokens.contains(&market.up_token_id)
+            && !tokens.contains(&market.down_token_id);
+        if unique {
+            conditions.insert(market.condition_id.clone());
+            tokens.insert(market.up_token_id.clone());
+            tokens.insert(market.down_token_id.clone());
+        }
+        unique
+    });
+}
+
+fn crypto_market_from_row(
+    row: Market,
+    targets: &std::collections::BTreeMap<String, (String, DateTime<Utc>)>,
+) -> Option<CryptoMarket> {
+    let (asset, fallback_start) = targets.get(row.slug.trim())?;
+    let condition_id = row.condition_id.trim();
+    if condition_id.is_empty() {
+        return None;
+    }
+    let tokens = parse_token_ids(&row.clob_token_ids);
+    let (mut up_token_id, mut down_token_id) = up_down_token_ids(&row.outcomes.0, &tokens);
+    if (up_token_id.is_empty() || down_token_id.is_empty()) && tokens.len() >= 2 {
+        up_token_id = tokens[0].clone();
+        down_token_id = tokens[1].clone();
+    }
+    if up_token_id.is_empty() || down_token_id.is_empty() {
+        return None;
+    }
+    let (window_start, window_end) = window_from_slug(&row.slug, "5m")
+        .unwrap_or((*fallback_start, *fallback_start + Duration::minutes(5)));
+    Some(CryptoMarket {
+        id: row.id,
+        condition_id: condition_id.into(),
+        asset: asset.clone(),
+        timeframe: "5m".into(),
+        slug: row.slug,
+        question: row.question,
+        start_time: Some(window_start),
+        end_time: Some(window_end),
+        active: row.active,
+        closed: row.closed,
+        accepting: row.active && !row.closed,
+        up_token_id,
+        down_token_id,
+    })
+}
+
+fn complete_market_valid(
+    market: &CryptoMarket,
+    targets: &std::collections::BTreeMap<String, (String, DateTime<Utc>)>,
+) -> bool {
+    targets.get(&market.slug).is_some_and(|(asset, start)| {
+        market.asset == *asset
+            && market.start_time == Some(*start)
+            && market.end_time == Some(*start + Duration::minutes(5))
+            && market.active
+            && !market.closed
+            && market.accepting
+            && market.up_token_id != market.down_token_id
+    })
 }
 
 pub fn normalize_outcome(value: &str) -> &'static str {
@@ -337,6 +463,217 @@ fn matches_interval(event: &Event, market: &Market, interval: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    fn market_json(slug: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": format!("gamma-{slug}"),
+            "conditionId": format!("condition-{slug}"),
+            "slug": slug,
+            "question": "Up or Down",
+            "active": true,
+            "closed": false,
+            "outcomes": ["Up", "Down"],
+            "clobTokenIds": format!("[\"{slug}-up\",\"{slug}-down\"]")
+        })
+    }
+
+    fn mock_client(
+        responses: Vec<(u16, String)>,
+    ) -> (crate::Client, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for (status, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut request = [0; 65_536];
+                let read = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                requests.push(request.lines().next().unwrap_or_default().to_string());
+                let reason = if status == 200 { "OK" } else { "Not Found" };
+                write!(
+                    stream,
+                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                )
+                .unwrap();
+            }
+            requests
+        });
+        let base = format!("http://{address}");
+        let client = crate::Client::new(crate::ClientConfig {
+            gamma_base_url: base.clone(),
+            clob_base_url: base.clone(),
+            data_base_url: base,
+        })
+        .unwrap();
+        (client, server)
+    }
+
+    fn three_window_slugs(start: DateTime<Utc>) -> Vec<String> {
+        [0, 5, 10]
+            .into_iter()
+            .map(|minutes| crypto_window_slug("BTC", "5m", start + Duration::minutes(minutes)))
+            .collect()
+    }
+
+    #[test]
+    fn complete_discovery_uses_one_batch_without_fallback() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let slugs = three_window_slugs(start);
+        let body = serde_json::to_string(
+            &slugs
+                .iter()
+                .map(|slug| market_json(slug))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let (client, server) = mock_client(vec![(200, body)]);
+
+        let rows = discover_complete_window_markets(
+            &client,
+            &["BTC".into()],
+            start,
+            start + Duration::minutes(10),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn partial_batch_fetches_only_missing_slug() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let slugs = three_window_slugs(start);
+        let batch = serde_json::to_string(
+            &slugs[..2]
+                .iter()
+                .map(|slug| market_json(slug))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let fallback = serde_json::to_string(&market_json(&slugs[2])).unwrap();
+        let (client, server) = mock_client(vec![(200, batch), (200, fallback)]);
+
+        let rows = discover_complete_window_markets(
+            &client,
+            &["BTC".into()],
+            start,
+            start + Duration::minutes(10),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains(&format!("/markets/slug/{}", slugs[2])));
+    }
+
+    #[test]
+    fn duplicate_batch_identity_is_retried_by_slug() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let slugs = three_window_slugs(start);
+        let mut duplicate = market_json(&slugs[2]);
+        duplicate["conditionId"] = market_json(&slugs[0])["conditionId"].clone();
+        let batch = serde_json::to_string(&vec![
+            market_json(&slugs[0]),
+            market_json(&slugs[1]),
+            duplicate,
+        ])
+        .unwrap();
+        let fallback = serde_json::to_string(&market_json(&slugs[2])).unwrap();
+        let (client, server) = mock_client(vec![(200, batch), (200, fallback)]);
+
+        let rows = discover_complete_window_markets(
+            &client,
+            &["BTC".into()],
+            start,
+            start + Duration::minutes(10),
+        )
+        .unwrap();
+        let requests = server.join().unwrap();
+
+        assert_eq!(rows.len(), 3);
+        assert_eq!(requests.len(), 2);
+        assert!(requests[1].contains(&format!("/markets/slug/{}", slugs[2])));
+    }
+
+    #[test]
+    fn unresolved_fallback_reports_missing_slug() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let slugs = three_window_slugs(start);
+        let batch = serde_json::to_string(
+            &slugs[..2]
+                .iter()
+                .map(|slug| market_json(slug))
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let (client, server) = mock_client(vec![(200, batch), (404, "{}".into())]);
+
+        let error = discover_complete_window_markets(
+            &client,
+            &["BTC".into()],
+            start,
+            start + Duration::minutes(10),
+        )
+        .unwrap_err();
+        server.join().unwrap();
+
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "incomplete 5m market discovery: found 2/3; missing {}",
+                slugs[2]
+            )
+        );
+    }
+
+    #[test]
+    fn failed_batch_does_not_fan_out() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let (client, server) = mock_client(vec![(429, "{}".into())]);
+
+        let error = discover_complete_window_markets(
+            &client,
+            &["BTC".into()],
+            start,
+            start + Duration::minutes(10),
+        )
+        .unwrap_err();
+        let requests = server.join().unwrap();
+
+        assert!(matches!(error, crate::Error::RateLimited { .. }));
+        assert_eq!(requests.len(), 1);
+    }
+
+    #[test]
+    fn strict_discovery_rejects_invalid_inputs_before_network_access() {
+        let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
+        let cases = [
+            (Vec::new(), start, start),
+            (vec!["BTC".into(), "btc".into()], start, start),
+            (
+                vec!["BTC".into()],
+                start + Duration::seconds(1),
+                start + Duration::minutes(5),
+            ),
+            (vec!["BTC".into()], start + Duration::minutes(5), start),
+        ];
+        for (assets, from, through) in cases {
+            let (client, server) = mock_client(Vec::new());
+            assert!(discover_complete_window_markets(&client, &assets, from, through).is_err());
+            assert!(server.join().unwrap().is_empty());
+        }
+    }
 
     #[test]
     fn discover_window_markets_resolves_gamma_tokens() -> crate::Result<()> {

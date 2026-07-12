@@ -59,6 +59,10 @@ impl Client {
         self.gamma.markets(params)
     }
 
+    pub fn market_by_slug(&self, slug: &str) -> Result<Market> {
+        self.gamma.market_by_slug(slug)
+    }
+
     pub fn order_book(&self, token_id: &str) -> Result<ClobOrderBook> {
         self.clob.order_book(token_id)
     }
