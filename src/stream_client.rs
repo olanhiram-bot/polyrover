@@ -44,8 +44,7 @@ pub struct MarketWsClient {
 
 impl MarketWsClient {
     pub fn connect(config: Config) -> Result<Self> {
-        let (mut socket, _) = connect(config.url.as_str()).map_err(ws_err)?;
-        set_read_timeout(&mut socket, Duration::from_millis(100))?;
+        let socket = Self::dial(&config)?;
         let mut stats = StreamStats::new("market");
         stats.mark_connected();
         Ok(Self {
@@ -60,11 +59,32 @@ impl MarketWsClient {
     }
 
     pub fn connect_with_retries(config: Config) -> Result<Self> {
-        let delays = reconnect_delays(&config);
+        let socket = Self::dial_with_retries(&config)?;
+        let mut stats = StreamStats::new("market");
+        stats.mark_connected();
+        Ok(Self {
+            socket,
+            config,
+            stats,
+            dedup: Deduplicator::new(4096, 120_000),
+            tracker: Tracker::new(),
+            subscriptions: Vec::new(),
+            last_ping: Instant::now(),
+        })
+    }
+
+    fn dial(config: &Config) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+        let (mut socket, _) = connect(config.url.as_str()).map_err(ws_err)?;
+        set_read_timeout(&mut socket, Duration::from_millis(100))?;
+        Ok(socket)
+    }
+
+    fn dial_with_retries(config: &Config) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+        let delays = reconnect_delays(config);
         let mut last_err = None;
         for attempt in 0..=delays.len() {
-            match Self::connect(config.clone()) {
-                Ok(client) => return Ok(client),
+            match Self::dial(config) {
+                Ok(socket) => return Ok(socket),
                 Err(err) => last_err = Some(err),
             }
             if let Some(delay) = delays.get(attempt) {
@@ -174,11 +194,13 @@ impl MarketWsClient {
     }
 
     fn reconnect_and_resubscribe(&mut self) -> Result<()> {
+        self.stats.mark_disconnected();
+        self.socket = Self::dial_with_retries(&self.config)?;
+        self.stats.mark_connected();
+        self.stats.record_reconnect();
+        self.last_ping = Instant::now();
         let subscriptions = self.subscriptions.clone();
-        let mut replacement = Self::connect_with_retries(self.config.clone())?;
-        replacement.subscribe_assets(&subscriptions)?;
-        *self = replacement;
-        Ok(())
+        self.subscribe_assets(&subscriptions)
     }
 
     pub fn read_events(&mut self, observed_at_ms: i64) -> Result<Vec<MarketEvent>> {
@@ -416,6 +438,98 @@ mod tests {
         let rows = client.read_raw(1).unwrap();
 
         assert_eq!(rows[0].event_type, "new_market");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn reconnect_preserves_stream_stats_and_counts_the_reconnect() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            assert!(socket.read().unwrap().to_string().contains("token-1"));
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"new_market","id":"market-1"}"#.into(),
+                ))
+                .unwrap();
+            drop(socket);
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            assert!(socket.read().unwrap().to_string().contains("token-1"));
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"new_market","id":"market-2"}"#.into(),
+                ))
+                .unwrap();
+        });
+        let mut client = MarketWsClient::connect(Config {
+            url: format!("ws://{address}"),
+            ..Default::default()
+        })
+        .unwrap();
+        client.subscribe_assets(&["token-1".into()]).unwrap();
+
+        let mut seen = Vec::new();
+        while seen.len() < 2 {
+            for raw in client.read_raw(1).unwrap() {
+                seen.push(raw.payload["id"].as_str().unwrap_or_default().to_string());
+            }
+        }
+        assert_eq!(seen, vec!["market-1", "market-2"]);
+
+        let stats = client.stats();
+        assert_eq!(stats.reconnects, 1);
+        assert_eq!(stats.messages_received, 2);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn reconnect_preserves_dedup_so_replayed_messages_stay_suppressed() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            assert!(socket.read().unwrap().to_string().contains("token-1"));
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"book","hash":"h1","asset_id":"token-1"}"#.into(),
+                ))
+                .unwrap();
+            drop(socket);
+
+            let (stream, _) = listener.accept().unwrap();
+            let mut socket = tungstenite::accept(stream).unwrap();
+            assert!(socket.read().unwrap().to_string().contains("token-1"));
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"book","hash":"h1","asset_id":"token-1"}"#.into(),
+                ))
+                .unwrap();
+            socket
+                .send(Message::Text(
+                    r#"{"event_type":"book","hash":"h2","asset_id":"token-1"}"#.into(),
+                ))
+                .unwrap();
+        });
+        let mut client = MarketWsClient::connect(Config {
+            url: format!("ws://{address}"),
+            ..Default::default()
+        })
+        .unwrap();
+        client.subscribe_assets(&["token-1".into()]).unwrap();
+
+        let mut seen = Vec::new();
+        while seen.len() < 2 {
+            for raw in client.read_raw(1).unwrap() {
+                seen.push(raw.payload["hash"].as_str().unwrap_or_default().to_string());
+            }
+        }
+        assert_eq!(seen, vec!["h1", "h2"]);
+        assert_eq!(client.stats().duplicate_messages, 1);
         server.join().unwrap();
     }
 
