@@ -1,4 +1,8 @@
-use polyrover::{gamma, output, paper, simulation, Client, ClientConfig, Result};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use polyrover::{
+    gamma, output, paper, simulation, stream, stream_client, Client, ClientConfig, Result,
+};
 use serde_json::json;
 
 fn main() {
@@ -43,6 +47,7 @@ fn run() -> Result<()> {
         [group, cmd, rest @ ..] if group == "analytics" && cmd == "leaderboard" => {
             data_leaderboard(&client, rest)
         }
+        [group, cmd, rest @ ..] if group == "stream" && cmd == "watch" => stream_watch(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "reset" => sim_reset(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "buy" => sim_buy(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "sell" => sim_sell(rest),
@@ -174,6 +179,42 @@ fn paper_order(args: &[String]) -> paper::Order {
     }
 }
 
+fn stream_watch(args: &[String]) -> Result<()> {
+    let tokens = flag_values(args, "--token-id");
+    let limit: usize = flag(args, "--limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10);
+    let seconds: u64 = flag(args, "--seconds")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(30);
+    let mut config = stream::Config::default();
+    if let Some(url) = flag(args, "--url") {
+        config.url = url;
+    }
+    let mut client = stream_client::MarketWsClient::connect_with_retries(config)?;
+    if !tokens.is_empty() {
+        client.subscribe_assets(&tokens)?;
+    }
+    let deadline = Instant::now() + Duration::from_secs(seconds.max(1));
+    let mut events = Vec::new();
+    while events.len() < limit && Instant::now() < deadline {
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or_default();
+        events.extend(client.read_raw(now_ms)?);
+    }
+    let stats = client.stats();
+    client.close()?;
+    print_success("stream watch", json!({"events": events, "stats": stats}))
+}
+
+fn flag_values(args: &[String], name: &str) -> Vec<String> {
+    args.windows(2)
+        .filter_map(|w| (w[0] == name).then(|| w[1].clone()))
+        .collect()
+}
+
 fn flag(args: &[String], name: &str) -> Option<String> {
     args.windows(2)
         .find_map(|w| (w[0] == name).then(|| w[1].clone()))
@@ -185,5 +226,5 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 }
 
 fn print_help() {
-    println!("polyrover read-only Polymarket CLI\n\nCommands:\n  ping --json\n  gamma search --query <text> [--limit n] --json\n  gamma markets [--limit n] --json\n  clob book --token-id <id> --json\n  clob price --token-id <id> --side buy|sell --json\n  clob simulate --token <id> --side buy|sell --amount <n> [--limit-price p] --json\n  analytics positions --user <wallet> [--limit n] --json\n  analytics trades --user <wallet> [--limit n] --json\n  analytics leaderboard [--limit n] --json\n  sim reset [--cash n] --json\n  sim buy --token-id <id> --price <p> --size <n> --json\n  sim sell --token-id <id> --price <p> --size <n> --json");
+    println!("polyrover read-only Polymarket CLI\n\nCommands:\n  ping --json\n  gamma search --query <text> [--limit n] --json\n  gamma markets [--limit n] --json\n  clob book --token-id <id> --json\n  clob price --token-id <id> --side buy|sell --json\n  clob simulate --token <id> --side buy|sell --amount <n> [--limit-price p] --json\n  analytics positions --user <wallet> [--limit n] --json\n  analytics trades --user <wallet> [--limit n] --json\n  analytics leaderboard [--limit n] --json\n  stream watch --token-id <id> [--token-id <id> ...] [--url ws://...] [--limit n] [--seconds s] --json\n  sim reset [--cash n] --json\n  sim buy --token-id <id> --price <p> --size <n> --json\n  sim sell --token-id <id> --price <p> --size <n> --json");
 }
