@@ -75,6 +75,9 @@ polyrover analytics positions --user <WALLET> --limit 20 --json
 polyrover analytics trades --user <WALLET> --limit 20 --json
 polyrover analytics leaderboard --limit 20 --json
 
+# Watch the public market WebSocket (bounded by --limit and --seconds)
+polyrover stream watch --token-id <TOKEN_ID> --limit 10 --seconds 30 --json
+
 # Local paper state examples
 polyrover sim reset --cash 10000 --json
 polyrover sim buy --token-id <TOKEN_ID> --price 0.42 --size 10 --json
@@ -128,6 +131,7 @@ Commands:
   analytics positions --user <wallet> [--limit n] --json
   analytics trades --user <wallet> [--limit n] --json
   analytics leaderboard [--limit n] --json
+  stream watch --token-id <id> [--token-id <id> ...] [--url ws://...] [--limit n] [--seconds s] --json
   sim reset [--cash n] --json
   sim buy --token-id <id> --price <p> --size <n> --json
   sim sell --token-id <id> --price <p> --size <n> --json
