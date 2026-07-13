@@ -1,3 +1,5 @@
+//! Authoritative market outcome resolution.
+
 use chrono::{DateTime, Utc};
 
 use crate::{

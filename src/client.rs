@@ -1,3 +1,6 @@
+//! Unified [`Client`] facade over the Gamma, CLOB, and Data API clients,
+//! plus aggregate health reporting.
+
 use crate::{
     clob, data,
     data_types::{LeaderboardRow, Position, Trade},

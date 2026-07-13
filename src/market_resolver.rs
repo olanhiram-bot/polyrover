@@ -1,3 +1,6 @@
+//! Crypto asset/window market discovery and stable up/down token
+//! resolution over the Gamma API.
+
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 

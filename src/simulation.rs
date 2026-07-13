@@ -1,3 +1,5 @@
+//! Fill simulation of a hypothetical order against a CLOB book snapshot.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{types::ClobOrderBook, Error, Result};

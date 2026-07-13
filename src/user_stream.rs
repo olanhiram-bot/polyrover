@@ -1,3 +1,5 @@
+//! User WSS endpoint configuration and typed order/trade message shapes.
+
 use std::net::TcpStream;
 
 use serde::{Deserialize, Serialize};

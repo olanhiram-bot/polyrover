@@ -1,3 +1,5 @@
+//! Gamma API client: market and event discovery queries.
+
 use crate::{
     transport,
     types::{Event, HealthResponse, Market, SearchResponse},

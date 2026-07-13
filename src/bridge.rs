@@ -1,3 +1,5 @@
+//! Deposit-address and asset metadata types for the Polymarket bridge API.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{

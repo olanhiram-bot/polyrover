@@ -1,3 +1,5 @@
+//! Shared HTTP transport: client construction, timeouts, and retries.
+
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{Error, Result};

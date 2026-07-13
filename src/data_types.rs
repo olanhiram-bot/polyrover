@@ -1,3 +1,5 @@
+//! Row types returned by the Data API.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 

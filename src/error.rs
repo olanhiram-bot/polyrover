@@ -1,3 +1,5 @@
+//! Error taxonomy with retry and rate-limit classification.
+
 use std::{error, fmt};
 
 pub type Result<T> = std::result::Result<T, Error>;

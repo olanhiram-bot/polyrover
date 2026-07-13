@@ -1,3 +1,6 @@
+//! Polygon chain and proxy-factory constants plus wallet readiness
+//! reporting (read-only; no key handling).
+
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 

@@ -1,3 +1,5 @@
+//! Data API client: positions, closed positions, trades, and activity.
+
 use serde::Deserialize;
 
 use crate::{

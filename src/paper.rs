@@ -1,3 +1,5 @@
+//! Local paper-trading state: orders, fills, and positions (no network).
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 

@@ -1,3 +1,5 @@
+//! Environment-driven SDK configuration.
+
 use std::{env, time::Duration};
 
 use crate::{Error, Result};

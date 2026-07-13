@@ -1,3 +1,6 @@
+//! Resilient market WSS subscription client: connection lifecycle, ping,
+//! pong-timeout detection, reconnect, and event deduplication.
+
 use std::{
     io::ErrorKind,
     net::TcpStream,

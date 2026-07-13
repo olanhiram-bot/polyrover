@@ -1,3 +1,5 @@
+//! Derived wallet-intelligence formulas and confidence labels.
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 

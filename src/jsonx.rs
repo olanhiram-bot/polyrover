@@ -1,3 +1,6 @@
+//! Tolerant JSON deserializers for inconsistent upstream encodings
+//! (string-or-number, defaulted booleans and floats).
+
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 

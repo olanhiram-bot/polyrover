@@ -1,3 +1,6 @@
+//! CLOB L2 API-key credential types, redaction, and HMAC request-header
+//! construction for authenticated reads.
+
 use std::collections::BTreeMap;
 
 use base64::{engine::general_purpose, Engine};

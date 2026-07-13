@@ -1,3 +1,5 @@
+//! CLOB REST client: public order books, prices, and market metadata.
+
 use serde::{Deserialize, Serialize};
 
 use crate::{

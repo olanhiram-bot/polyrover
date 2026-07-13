@@ -1,3 +1,5 @@
+//! `polyrover` CLI entrypoint dispatching to the SDK modules.
+
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use polyrover::{

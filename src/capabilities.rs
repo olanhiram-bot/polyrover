@@ -1,3 +1,5 @@
+//! Catalog of SDK/CLI capabilities with their auth and wallet requirements.
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

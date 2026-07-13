@@ -1,3 +1,5 @@
+//! Market WSS endpoint configuration and typed message decoding.
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;

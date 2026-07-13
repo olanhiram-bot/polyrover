@@ -1,3 +1,6 @@
+//! Order-book state maintenance from stream events: book updates,
+//! top-of-book, liquidity, and depth calculations.
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};

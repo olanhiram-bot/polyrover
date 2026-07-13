@@ -1,3 +1,5 @@
+//! Core Polymarket domain types: markets, events, normalized timestamps.
+
 use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};

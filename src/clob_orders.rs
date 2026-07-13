@@ -1,3 +1,6 @@
+//! Typed CLOB order request/response shapes (no signing or placement here;
+//! execution lives in polygolem).
+
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
