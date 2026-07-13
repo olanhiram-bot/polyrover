@@ -74,9 +74,9 @@ pub struct ClosedPosition {
 pub struct Trade {
     #[serde(default)]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, alias = "conditionId")]
     pub market: String,
-    #[serde(default)]
+    #[serde(default, alias = "asset")]
     pub asset_id: String,
     #[serde(default, rename = "proxyWallet")]
     pub proxy_wallet: String,
@@ -92,10 +92,12 @@ pub struct Trade {
     pub outcome: String,
     #[serde(default)]
     pub status: String,
-    #[serde(default)]
+    #[serde(default, alias = "transactionHash")]
     pub transaction_hash: String,
-    #[serde(default)]
+    #[serde(default, alias = "createdAt")]
     pub created_at: String,
+    #[serde(default, deserialize_with = "int_or_zero")]
+    pub timestamp: i64,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -186,4 +188,34 @@ pub struct LiveVolumeResponse {
     pub markets: Vec<Value>,
     #[serde(default)]
     pub events: Vec<Value>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_market_trade_uses_real_data_api_field_names() {
+        let trade: Trade = serde_json::from_str(
+            r#"{
+                "conditionId":"condition-1",
+                "asset":"token-1",
+                "proxyWallet":"0xuser",
+                "side":"SELL",
+                "price":0.49,
+                "size":5,
+                "transactionHash":"0xtx",
+                "timestamp":1783956905
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(trade.market, "condition-1");
+        assert_eq!(trade.asset_id, "token-1");
+        assert_eq!(trade.transaction_hash, "0xtx");
+        assert_eq!(trade.timestamp, 1_783_956_905);
+        assert!(!trade.extra.contains_key("conditionId"));
+        assert!(!trade.extra.contains_key("asset"));
+        assert!(!trade.extra.contains_key("transactionHash"));
+        assert!(!trade.extra.contains_key("timestamp"));
+    }
 }
