@@ -29,6 +29,22 @@ If the official [`polymarket-cli`](https://github.com/Polymarket/polymarket-cli)
 
 **Short version:** choose polyrover when the job is *observe, analyze, simulate, automate safely*. Choose `polymarket-cli` when you intentionally need a full trading wallet workflow.
 
+## Library layout
+
+- HTTP clients: `gamma` (market/event discovery), `clob` (order books,
+  prices), `data` (positions, trades, activity), unified behind `Client`.
+- Streaming: `stream` (market WSS decoding), `stream_client` (subscription
+  lifecycle, ping, reconnect, dedup), `user_stream` (user WSS shapes).
+- Domain: `types`, `market_resolver` (crypto window discovery, up/down token
+  resolution), `market_data` (book state, top-of-book, liquidity, depth),
+  `market_results` (authoritative outcomes).
+- Local research: `paper` (paper-trading state), `simulation` (book fill
+  simulation).
+- Support: `auth`, `wallet`, `capabilities`, `config`, `error`, `jsonx`,
+  `output`, `transport`.
+
+Each module carries a `//!` doc; `cargo doc --open` renders the full map.
+
 ## Install
 
 ```bash
