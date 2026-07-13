@@ -56,6 +56,12 @@ impl Client {
         ))
     }
 
+    /// Returns one deterministic page of public market trades.
+    pub fn market_trades_page(&self, market: &str, limit: u32, offset: u32) -> Result<Vec<Trade>> {
+        self.transport
+            .get_json(&market_trades_path(market, limit, offset))
+    }
+
     pub fn activity(&self, user: &str, limit: u32) -> Result<Vec<Activity>> {
         self.transport
             .get_json(&path("/activity", &[pair("user", user), limit_pair(limit)]))
@@ -153,6 +159,17 @@ fn limit_pair(limit: u32) -> Option<(String, String)> {
     (limit > 0).then(|| ("limit".into(), limit.to_string()))
 }
 
+fn market_trades_path(market: &str, limit: u32, offset: u32) -> String {
+    path(
+        "/trades",
+        &[
+            pair("market", market),
+            limit_pair(limit),
+            Some(("offset".into(), offset.to_string())),
+        ],
+    )
+}
+
 fn path(base: &str, pairs: &[Option<(String, String)>]) -> String {
     let pairs: Vec<_> = pairs.iter().flatten().collect();
     if pairs.is_empty() {
@@ -195,6 +212,10 @@ mod tests {
         assert_eq!(
             path("/traded", &[pair("user", "a b")]),
             "/traded?user=a%20b"
+        );
+        assert_eq!(
+            market_trades_path("condition-1", 1_000, 2_000),
+            "/trades?market=condition-1&limit=1000&offset=2000"
         );
     }
 
