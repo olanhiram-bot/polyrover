@@ -211,7 +211,8 @@ fn stream_watch(args: &[String]) -> Result<()> {
 
 fn flag_values(args: &[String], name: &str) -> Vec<String> {
     args.windows(2)
-        .filter_map(|w| (w[0] == name).then(|| w[1].clone()))
+        .filter(|w| w[0] == name)
+        .map(|w| w[1].clone())
         .collect()
 }
 
