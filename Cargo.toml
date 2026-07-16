@@ -6,17 +6,26 @@ description = "Read-only Polymarket CLI and library for research, agents, and au
 repository = "https://github.com/TrebuchetDynamics/polyrover"
 license = "MIT"
 
+[features]
+default = ["public"]
+public = ["dep:reqwest", "dep:tungstenite"]
+authenticated = ["public", "dep:base64", "dep:hmac", "dep:sha2"]
+wallet = ["dep:hex", "dep:sha3"]
+execution = ["authenticated", "wallet"]
+bridge = []
+full = ["execution", "bridge"]
+
 [dependencies]
-base64 = "0.22"
+base64 = { version = "0.22", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
-hex = "0.4"
-hmac = "0.12"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+hex = { version = "0.4", optional = true }
+hmac = { version = "0.12", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
-sha2 = "0.10"
-sha3 = "0.10"
-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+sha2 = { version = "0.10", optional = true }
+sha3 = { version = "0.10", optional = true }
+tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
 
 [lib]
 name = "polyrover"
@@ -25,3 +34,4 @@ path = "src/lib.rs"
 [[bin]]
 name = "polyrover"
 path = "src/main.rs"
+required-features = ["public"]

@@ -37,16 +37,49 @@ impl Capability {
 }
 
 pub fn all() -> Vec<Capability> {
-    let mut caps = vec![
-        cap("bridge.funding", "Bridge", "Supported assets, deposit addresses, quotes, and deposit status for pUSD funding.", false, true, vec![AuthRequirement::None], WalletMode::DepositWalletOnly, &["pkg/bridge"], &["bridge assets", "bridge deposit", "bridge status", "bridge quote"]),
+    let mut caps: Vec<Capability> = Vec::new();
+
+    #[cfg(feature = "public")]
+    caps.extend([
         cap("clob.public_data", "CLOB API", "Public order books, prices, spreads, tick sizes, and market metadata.", true, false, vec![AuthRequirement::None], WalletMode::None, &["pkg/clob", "pkg/orderbook", "pkg/marketdata"], &["book", "exchange book", "exchange markets", "exchange price-history"]),
-        cap("clob.trading", "CLOB API", "Deposit-wallet CLOB V2 order signing, placement, cancellation, account reads, and builder attribution.", false, true, vec![AuthRequirement::L1, AuthRequirement::L2, AuthRequirement::PrivateKey], WalletMode::DepositWalletOnly, &["pkg/clob"], &["exchange create-order", "exchange market-order", "exchange cancel"]),
         cap("data.positions", "Data API", "Public wallet-level positions, activity, trades, value, holders, leaderboard, and open interest.", true, false, vec![AuthRequirement::None], WalletMode::None, &["pkg/data"], &["analytics positions", "analytics trades", "analytics activity"]),
         cap("gamma.markets", "Gamma API", "Public event, market, tag, series, comment, and search discovery.", true, false, vec![AuthRequirement::None], WalletMode::None, &["pkg/gamma", "pkg/universal"], &["markets search", "markets markets", "markets market"]),
-        cap("relayer.deposit_wallet", "Relayer V2", "Deposit-wallet deploy, approvals, gasless transactions, CTF redeem, and transaction lookup.", false, true, vec![AuthRequirement::Siwe, AuthRequirement::PrivateKey], WalletMode::DepositWalletOnly, &["pkg/relayer", "pkg/ctf", "pkg/settlement"], &["wallet", "tx transaction"]),
         cap("websocket.market", "CLOB WebSocket", "Public real-time book, price, last-trade, tick-size, best-bid-ask, and lifecycle events.", true, false, vec![AuthRequirement::None], WalletMode::None, &["pkg/stream", "pkg/marketdata"], &["stream market", "stream crypto", "marketdata live"]),
-        cap("websocket.user", "CLOB WebSocket", "Authenticated user order and trade stream for inspection and reconciliation.", false, false, vec![AuthRequirement::L2], WalletMode::DepositWalletOnly, &["pkg/stream"], &["stream user"]),
-    ];
+    ]);
+    #[cfg(feature = "authenticated")]
+    caps.push(cap(
+        "websocket.user",
+        "CLOB WebSocket",
+        "Authenticated user order and trade stream for inspection and reconciliation.",
+        false,
+        false,
+        vec![AuthRequirement::L2],
+        WalletMode::DepositWalletOnly,
+        &["pkg/stream"],
+        &["stream user"],
+    ));
+    #[cfg(feature = "wallet")]
+    caps.push(cap("relayer.deposit_wallet", "Relayer V2", "Deposit-wallet deploy, approvals, gasless transactions, CTF redeem, and transaction lookup.", false, true, vec![AuthRequirement::Siwe, AuthRequirement::PrivateKey], WalletMode::DepositWalletOnly, &["pkg/relayer", "pkg/ctf", "pkg/settlement"], &["wallet", "tx transaction"]));
+    #[cfg(feature = "execution")]
+    caps.push(cap("clob.trading", "CLOB API", "Deposit-wallet CLOB V2 order signing, placement, cancellation, account reads, and builder attribution.", false, true, vec![AuthRequirement::L1, AuthRequirement::L2, AuthRequirement::PrivateKey], WalletMode::DepositWalletOnly, &["pkg/clob"], &["exchange create-order", "exchange market-order", "exchange cancel"]));
+    #[cfg(feature = "bridge")]
+    caps.push(cap(
+        "bridge.funding",
+        "Bridge",
+        "Supported assets, deposit addresses, quotes, and deposit status for pUSD funding.",
+        false,
+        true,
+        vec![AuthRequirement::None],
+        WalletMode::DepositWalletOnly,
+        &["pkg/bridge"],
+        &[
+            "bridge assets",
+            "bridge deposit",
+            "bridge status",
+            "bridge quote",
+        ],
+    ));
+
     caps.sort_by(|a, b| a.id.cmp(&b.id));
     caps
 }
@@ -89,36 +122,47 @@ mod tests {
     use super::*;
 
     #[test]
-    fn includes_critical_surfaces_and_sorted() {
+    fn includes_only_compiled_surfaces_and_stays_sorted() {
         let caps = all();
+        let ids = caps.iter().map(|cap| cap.id.as_str()).collect::<Vec<_>>();
+        #[cfg(feature = "public")]
         for id in [
             "gamma.markets",
             "clob.public_data",
-            "clob.trading",
             "data.positions",
-            "relayer.deposit_wallet",
-            "bridge.funding",
             "websocket.market",
-            "websocket.user",
         ] {
-            assert!(caps.iter().any(|c| c.id == id), "missing {id}");
+            assert!(ids.contains(&id), "missing {id}");
         }
-        assert!(caps.windows(2).all(|w| w[0].id <= w[1].id));
+        #[cfg(feature = "authenticated")]
+        assert!(ids.contains(&"websocket.user"));
+        #[cfg(feature = "wallet")]
+        assert!(ids.contains(&"relayer.deposit_wallet"));
+        #[cfg(feature = "execution")]
+        assert!(ids.contains(&"clob.trading"));
+        #[cfg(feature = "bridge")]
+        assert!(ids.contains(&"bridge.funding"));
+        assert!(caps.windows(2).all(|pair| pair[0].id <= pair[1].id));
     }
 
     #[test]
-    fn trading_declares_auth_and_read_only_excludes_secrets() {
-        let caps = all();
-        let trading = caps.iter().find(|c| c.id == "clob.trading").unwrap();
-        assert!(trading.mutating);
-        assert!(trading.requires(AuthRequirement::L1));
-        assert!(trading.requires(AuthRequirement::L2));
-        assert!(trading.requires(AuthRequirement::PrivateKey));
-        for cap in caps.iter().filter(|c| c.read_only) {
+    fn read_only_capabilities_exclude_secret_requirements() {
+        for cap in all().iter().filter(|cap| cap.read_only) {
             assert!(!cap.mutating);
             assert!(!cap.requires(AuthRequirement::L2));
             assert!(!cap.requires(AuthRequirement::Siwe));
             assert!(!cap.requires(AuthRequirement::PrivateKey));
         }
+    }
+
+    #[cfg(feature = "execution")]
+    #[test]
+    fn trading_declares_explicit_auth() {
+        let caps = all();
+        let trading = caps.iter().find(|cap| cap.id == "clob.trading").unwrap();
+        assert!(trading.mutating);
+        assert!(trading.requires(AuthRequirement::L1));
+        assert!(trading.requires(AuthRequirement::L2));
+        assert!(trading.requires(AuthRequirement::PrivateKey));
     }
 }

@@ -6,7 +6,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug)]
 pub enum Error {
-    Http(reqwest::Error),
+    Http(String),
     Json(serde_json::Error),
     Url(String),
     Api { status: u16, body: String },
@@ -41,9 +41,10 @@ impl fmt::Display for Error {
 
 impl error::Error for Error {}
 
+#[cfg(feature = "public")]
 impl From<reqwest::Error> for Error {
     fn from(value: reqwest::Error) -> Self {
-        Self::Http(value)
+        Self::Http(value.to_string())
     }
 }
 

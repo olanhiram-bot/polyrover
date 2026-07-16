@@ -1,3 +1,5 @@
+#![cfg(feature = "public")]
+
 use std::{process::Command, thread};
 
 use tungstenite::Message;
