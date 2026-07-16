@@ -13,8 +13,7 @@ use crate::{
 pub struct MarketRef {
     pub condition_id: String,
     pub slug: String,
-    pub up_token_id: String,
-    pub down_token_id: String,
+    pub token_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -119,12 +118,24 @@ fn exact_gamma_result(row: &Market, market: &MarketRef) -> Option<(String, DateT
     }
     let resolved_at = row.closed_time.0?.with_timezone(&Utc);
     let token_ids = serde_json::from_str::<Vec<String>>(&row.clob_token_ids).ok()?;
-    if token_ids.len() != 2
-        || row.outcome_prices.0.len() != 2
-        || market.up_token_id.trim().is_empty()
-        || market.down_token_id.trim().is_empty()
-        || !((token_ids[0] == market.up_token_id && token_ids[1] == market.down_token_id)
-            || (token_ids[1] == market.up_token_id && token_ids[0] == market.down_token_id))
+    if token_ids.is_empty()
+        || token_ids.len() != row.outcome_prices.0.len()
+        || market.token_ids.is_empty()
+    {
+        return None;
+    }
+    let expected = market
+        .token_ids
+        .iter()
+        .map(|token| token.trim())
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = token_ids
+        .iter()
+        .map(|token| token.trim())
+        .collect::<std::collections::BTreeSet<_>>();
+    if expected.len() != market.token_ids.len()
+        || actual.len() != token_ids.len()
+        || expected != actual
     {
         return None;
     }
@@ -137,6 +148,31 @@ fn exact_gamma_result(row: &Market, market: &MarketRef) -> Option<(String, DateT
         }
     }
     let winner = token_ids.get(winner?)?.clone();
-    (winner == market.up_token_id || winner == market.down_token_id)
+    expected
+        .contains(winner.as_str())
         .then_some((winner, resolved_at))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_result_supports_arbitrary_outcomes() {
+        let closed_at = Utc::now();
+        let row = Market {
+            condition_id: "condition".into(),
+            closed: true,
+            closed_time: crate::types::NormalizedTime(Some(closed_at.fixed_offset())),
+            clob_token_ids: r#"["red","green","blue"]"#.into(),
+            outcome_prices: crate::jsonx::StringOrArray(vec!["0".into(), "1".into(), "0".into()]),
+            ..Default::default()
+        };
+        let market = MarketRef {
+            condition_id: "condition".into(),
+            slug: "colors".into(),
+            token_ids: vec!["red".into(), "green".into(), "blue".into()],
+        };
+        assert_eq!(exact_gamma_result(&row, &market).unwrap().0, "green");
+    }
 }

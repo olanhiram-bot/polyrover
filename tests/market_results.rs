@@ -48,8 +48,7 @@ fn resolves_exact_causal_market_result_through_polyrover_clients() {
             &MarketRef {
                 condition_id: "condition-1".into(),
                 slug: "btc-updown".into(),
-                up_token_id: "token-up".into(),
-                down_token_id: "token-down".into(),
+                token_ids: vec!["token-up".into(), "token-down".into()],
             },
             observed_at,
         )
