@@ -3,10 +3,13 @@
 Matrix schema: 1
 Last verified: 2026-07-16
 
-Live source and `Cargo.toml` are authoritative. `implemented` means callable
-behavior exists and has a linked contract test; `dto-only` means types exist
-without network execution; `unsupported` means a guard deliberately rejects
-the operation; `planned` means no current Rust API exists.
+Live source and `Cargo.toml` are authoritative. The machine-readable
+[`capabilities.json`](../capabilities.json) records operation-level source
+support independently of Cargo feature selection. `implemented` means callable
+behavior exists with test evidence; `dtoOnly` means types exist without the
+network operation; `unsupported` means a tested guard rejects it; and `planned`
+means no callable API exists. The names follow Polymarket CLI commit `9b18b5f`.
+Taxonomy parity does not imply implementation parity.
 
 ## Public
 
@@ -32,21 +35,21 @@ the operation; `planned` means no current Rust API exists.
 | Surface | Method/event | Endpoint/channel | Transport | Auth level | Cargo feature | Status | Rust API | Test |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Address derivation | Deposit/proxy/safe addresses | local helper | none | none | `wallet` | implemented | [`src/wallet.rs`](../src/wallet.rs) | [`src/wallet.rs`](../src/wallet.rs) |
-| Private-key signing/storage | Transaction/order signing | local | private key | `wallet` | planned | — | — |
+| Wallet signing | Transaction/order signing | local | wallet signer | `wallet` | planned | — | — |
 
 ## Execution
 
 | Surface | Method/event | Endpoint/channel | Transport | Auth level | Cargo feature | Status | Rust API | Test |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| CLOB orders | Order/cancel records and responses | CLOB | none | L2 + wallet | `execution` | dto-only | [`src/clob_orders.rs`](../src/clob_orders.rs) | [`src/clob_orders.rs`](../src/clob_orders.rs) |
+| CLOB orders | Order/cancel records and responses | CLOB | none | L2 + wallet | `execution` | dtoOnly | [`src/clob_orders.rs`](../src/clob_orders.rs) | [`src/clob_orders.rs`](../src/clob_orders.rs) |
 | Live order placement/cancel | Submit/cancel | CLOB | HTTPS | L2 + wallet | `execution` | planned | — | — |
 
 ## Bridge
 
 | Surface | Method/event | Endpoint/channel | Transport | Auth level | Cargo feature | Status | Rust API | Test |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Bridge metadata | Asset/deposit/status/quote shapes | Bridge API | none | none | `bridge` | dto-only | [`src/bridge.rs`](../src/bridge.rs) | [`src/bridge.rs`](../src/bridge.rs) |
-| Withdrawal dry run | Validation and safety result | local helper | none | none | `bridge` | unsupported | [`src/bridge.rs`](../src/bridge.rs) | [`src/bridge.rs`](../src/bridge.rs) |
+| Bridge metadata | Asset/deposit/status/quote shapes | Bridge API | none | none | `bridge` | dtoOnly | [`src/bridge.rs`](../src/bridge.rs) | [`src/bridge.rs`](../src/bridge.rs) |
+| Withdrawal simulation | Validation and safety result | local helper | none | none | `bridge` | implemented | [`src/bridge.rs`](../src/bridge.rs) | [`src/bridge.rs`](../src/bridge.rs) |
 | Bridge execution | Deposit/withdraw submit | Bridge API | HTTPS | wallet | `bridge` | planned | — | — |
 
 ## Official references
