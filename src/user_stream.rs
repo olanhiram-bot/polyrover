@@ -1,10 +1,14 @@
 //! User WSS endpoint configuration and typed order/trade message shapes.
 
-use std::net::TcpStream;
-
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Error as WsError, Message},
+    MaybeTlsStream, WebSocketStream,
+};
 
 use crate::{
     auth::ApiKey,
@@ -74,18 +78,18 @@ pub enum UserEvent {
 }
 
 pub struct UserWsClient {
-    socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    socket: WebSocketStream<MaybeTlsStream<TcpStream>>,
     credentials: ApiKey,
     stats: StreamStats,
 }
 
 impl UserWsClient {
-    pub fn connect(mut config: Config, credentials: ApiKey) -> Result<Self> {
+    pub async fn connect(mut config: Config, credentials: ApiKey) -> Result<Self> {
         credentials.validate()?;
         if config.url.is_empty() {
             config.url = DEFAULT_USER_URL.into();
         }
-        let (socket, _) = connect(config.url.as_str()).map_err(ws_err)?;
+        let (socket, _) = connect_async(config.url.as_str()).await.map_err(ws_err)?;
         let mut stats = StreamStats::new("user");
         stats.mark_connected();
         Ok(Self {
@@ -95,17 +99,24 @@ impl UserWsClient {
         })
     }
 
-    pub fn subscribe_user(&mut self, markets: &[String]) -> Result<()> {
+    pub async fn subscribe_user(&mut self, markets: &[String]) -> Result<()> {
         let payload = user_subscription_payload(&self.credentials, markets)?;
         self.socket
             .send(Message::Text(payload.to_string().into()))
+            .await
             .map_err(ws_err)?;
         self.stats.set_subscriptions(markets);
         Ok(())
     }
 
-    pub fn read_event(&mut self, observed_at_ms: i64) -> Result<UserEvent> {
-        let text = match self.socket.read().map_err(ws_err)? {
+    pub async fn read_event(&mut self, observed_at_ms: i64) -> Result<UserEvent> {
+        let message = self
+            .socket
+            .next()
+            .await
+            .ok_or_else(|| Error::Invalid("user ws closed".into()))?
+            .map_err(ws_err)?;
+        let text = match message {
             Message::Text(text) => text.to_string(),
             Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
                 .map_err(|err| Error::Invalid(format!("user ws binary is not utf8: {err}")))?,
@@ -124,8 +135,8 @@ impl UserWsClient {
     pub fn stats(&self) -> crate::stream::StreamStatsSnapshot {
         self.stats.snapshot()
     }
-    pub fn close(mut self) -> Result<()> {
-        self.socket.close(None).map_err(ws_err)
+    pub async fn close(mut self) -> Result<()> {
+        self.socket.close(None).await.map_err(ws_err)
     }
 }
 
@@ -175,7 +186,7 @@ pub fn parse_user_event(text: &str) -> Result<UserEvent> {
     }
 }
 
-fn ws_err(err: tungstenite::Error) -> Error {
+fn ws_err(err: WsError) -> Error {
     Error::Invalid(format!("user websocket: {err}"))
 }
 
@@ -189,6 +200,41 @@ mod tests {
             secret: "secret".into(),
             passphrase: "pass".into(),
         }
+    }
+
+    #[tokio::test]
+    async fn reads_user_event_over_async_websocket() {
+        use futures_util::{SinkExt, StreamExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            let subscription = socket.next().await.unwrap().unwrap().to_string();
+            assert!(subscription.contains("api-key-1234"));
+            socket
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    r#"{"event_type":"order","id":"o1"}"#.into(),
+                ))
+                .await
+                .unwrap();
+        });
+        let mut client = UserWsClient::connect(
+            Config {
+                url: format!("ws://{address}"),
+                ..Default::default()
+            },
+            key(),
+        )
+        .await
+        .unwrap();
+        client.subscribe_user(&["market-1".into()]).await.unwrap();
+        assert!(matches!(
+            client.read_event(1).await.unwrap(),
+            UserEvent::Order(order) if order.id == "o1"
+        ));
+        server.await.unwrap();
     }
 
     #[test]

@@ -8,7 +8,7 @@ license = "MIT"
 
 [features]
 default = ["public"]
-public = ["dep:futures-util", "dep:reqwest", "dep:tokio", "dep:tokio-tungstenite", "dep:tungstenite"]
+public = ["dep:futures-util", "dep:reqwest", "dep:tokio", "dep:tokio-tungstenite"]
 authenticated = ["public", "dep:base64", "dep:hmac", "dep:sha2"]
 wallet = ["dep:hex", "dep:sha3"]
 execution = ["authenticated", "wallet"]
@@ -28,7 +28,6 @@ sha2 = { version = "0.10", optional = true }
 sha3 = { version = "0.10", optional = true }
 tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time"], optional = true }
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"], optional = true }
-tungstenite = { version = "0.28", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"], optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["test-util"] }

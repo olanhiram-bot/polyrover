@@ -348,6 +348,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::thread;
+    use tokio_tungstenite::tungstenite;
 
     #[test]
     fn text_and_binary_messages_normalize() {

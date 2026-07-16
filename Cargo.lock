@@ -637,7 +637,6 @@ dependencies = [
  "sha3",
  "tokio",
  "tokio-tungstenite",
- "tungstenite",
 ]
 
 [[package]]
@@ -1246,7 +1245,6 @@ dependencies = [
  "sha1",
  "thiserror",
  "utf-8",
- "webpki-roots 0.26.11",
 ]
 
 [[package]]
