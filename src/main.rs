@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use polyrover::{
-    gamma, output, paper, simulation, stream, stream_client, Client, ClientConfig, Result,
+    gamma, output, paper, simulation, stream, stream_client, Client, ClientConfig, Error, Result,
 };
 use serde_json::json;
 
@@ -19,6 +19,9 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).filter(|a| a != "--json").collect();
+    if matches!(args.last().map(String::as_str), Some("-h" | "--help")) {
+        return print_command_help(&args[..args.len() - 1]);
+    }
     let client = Client::new(ClientConfig::default())?;
     match args.as_slice() {
         [] => {
@@ -29,6 +32,7 @@ async fn run() -> Result<()> {
             print_help();
             Ok(())
         }
+        [cmd, rest @ ..] if cmd == "help" => print_command_help(rest),
         [cmd] if cmd == "ping" => ping(&client).await,
         [group, cmd, rest @ ..] if group == "gamma" && cmd == "search" => {
             gamma_search(&client, rest).await
@@ -58,10 +62,7 @@ async fn run() -> Result<()> {
         [group, cmd, rest @ ..] if group == "sim" && cmd == "reset" => sim_reset(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "buy" => sim_buy(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "sell" => sim_sell(rest),
-        _ => {
-            print_help();
-            Ok(())
-        }
+        _ => Err(unknown_command(&args)),
     }
 }
 
@@ -246,5 +247,104 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 }
 
 fn print_help() {
-    println!("polyrover async Polymarket CLI\n\nCommands:\n  ping --json\n  gamma search --query <text> [--limit n] --json\n  gamma markets [--limit n] --json\n  clob book --token-id <id> --json\n  clob price --token-id <id> --side buy|sell --json\n  clob simulate --token <id> --side buy|sell --amount <n> [--limit-price p] --json\n  analytics positions --user <wallet> [--limit n] --json\n  analytics trades --user <wallet> [--limit n] --json\n  analytics leaderboard [--limit n] --json\n  stream watch --token-id <id> [--token-id <id> ...] [--url ws://...] [--limit n] [--seconds s] --json\n  sim reset [--cash n] --json\n  sim buy --token-id <id> --price <p> --size <n> --json\n  sim sell --token-id <id> --price <p> --size <n> --json");
+    println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping\n    gamma search\n    gamma markets\n    clob book\n    clob price\n    clob simulate\n    analytics positions\n    analytics trades\n    analytics leaderboard\n\n  Streaming:\n    stream watch\n\n  Local simulation:\n    sim reset\n    sim buy\n    sim sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.");
+}
+
+fn print_command_help(command: &[String]) -> Result<()> {
+    let (description, usage, options, example) = match command {
+        [command] if command == "ping" => (
+            "Check Gamma, CLOB, and Data API health.",
+            "ping [--json]",
+            "",
+            "polyrover ping --json",
+        ),
+        [group, command] if group == "gamma" && command == "search" => (
+            "Search Gamma markets, events, and profiles.",
+            "gamma search --query <text> [--limit <n>] [--json]",
+            "  --query <text>    Search text (required)\n  --limit <n>       Maximum results per type\n",
+            "polyrover gamma search --query \"bitcoin\" --limit 3 --json",
+        ),
+        [group, command] if group == "gamma" && command == "markets" => (
+            "List Gamma markets.",
+            "gamma markets [--limit <n>] [--json]",
+            "  --limit <n>    Maximum results\n",
+            "polyrover gamma markets --limit 3 --json",
+        ),
+        [group, command] if group == "clob" && command == "book" => (
+            "Fetch a token's CLOB order book.",
+            "clob book --token-id <id> [--json]",
+            "  --token-id <id>    CLOB token ID (required)\n",
+            "polyrover clob book --token-id TOKEN_ID --json",
+        ),
+        [group, command] if group == "clob" && command == "price" => (
+            "Fetch a token's CLOB price for one side.",
+            "clob price --token-id <id> [--side buy|sell] [--json]",
+            "  --token-id <id>    CLOB token ID (required)\n  --side <side>      buy or sell (default: buy)\n",
+            "polyrover clob price --token-id TOKEN_ID --side buy --json",
+        ),
+        [group, command] if group == "clob" && command == "simulate" => (
+            "Estimate a fill against the current CLOB book.",
+            "clob simulate --token <id> --amount <n> [--side buy|sell] [--limit-price <p>] [--json]",
+            "  --token <id>        CLOB token ID (required; --token-id also accepted)\n  --amount <n>       Amount to simulate (required)\n  --side <side>      buy or sell (default: buy)\n  --limit-price <p>  Optional price limit\n",
+            "polyrover clob simulate --token TOKEN_ID --amount 100 --limit-price 0.55 --json",
+        ),
+        [group, command] if group == "analytics" && command == "positions" => (
+            "Fetch a wallet's current positions.",
+            "analytics positions --user <wallet> [--limit <n>] [--json]",
+            "  --user <wallet>    Wallet address (required)\n  --limit <n>        Maximum results (default: 20)\n",
+            "polyrover analytics positions --user 0x1234 --limit 10 --json",
+        ),
+        [group, command] if group == "analytics" && command == "trades" => (
+            "Fetch a wallet's trades.",
+            "analytics trades --user <wallet> [--limit <n>] [--json]",
+            "  --user <wallet>    Wallet address (required)\n  --limit <n>        Maximum results (default: 20)\n",
+            "polyrover analytics trades --user 0x1234 --limit 10 --json",
+        ),
+        [group, command] if group == "analytics" && command == "leaderboard" => (
+            "Fetch the trader leaderboard.",
+            "analytics leaderboard [--limit <n>] [--json]",
+            "  --limit <n>    Maximum results (default: 20)\n",
+            "polyrover analytics leaderboard --limit 10 --json",
+        ),
+        [group, command] if group == "stream" && command == "watch" => (
+            "Watch public market WebSocket events.",
+            "stream watch [--token-id <id> ...] [--url <ws-url>] [--limit <n>] [--seconds <n>] [--json]",
+            "  --token-id <id>    Token to subscribe to; repeat for multiple tokens\n  --url <ws-url>      WebSocket endpoint (default: Polymarket market stream)\n  --limit <n>         Stop after this many events (default: 10)\n  --seconds <n>       Stop after this many seconds (default: 30)\n",
+            "polyrover stream watch --token-id TOKEN_ID --limit 10 --seconds 30 --json",
+        ),
+        [group, command] if group == "sim" && command == "reset" => (
+            "Create a fresh local paper state.",
+            "sim reset [--cash <n>] [--json]",
+            "  --cash <n>    Starting USD cash (default: 10000)\n",
+            "polyrover sim reset --cash 5000 --json",
+        ),
+        [group, command] if group == "sim" && command == "buy" => (
+            "Apply a local paper buy.",
+            "sim buy --token-id <id> --price <p> [--size <n>] [--market-id <id>] [--json]",
+            "  --token-id <id>   Token ID (required)\n  --price <p>        Fill price (required)\n  --size <n>         Fill size (default: 1)\n  --market-id <id>   Optional market ID\n",
+            "polyrover sim buy --token-id TOKEN_ID --price 0.55 --size 10 --json",
+        ),
+        [group, command] if group == "sim" && command == "sell" => (
+            "Apply a local paper sell.",
+            "sim sell --token-id <id> --price <p> [--size <n>] [--market-id <id>] [--json]",
+            "  --token-id <id>   Token ID (required)\n  --price <p>        Fill price (required)\n  --size <n>         Fill size (default: 1)\n  --market-id <id>   Optional market ID\n",
+            "polyrover sim sell --token-id TOKEN_ID --price 0.60 --size 10 --json",
+        ),
+        [] => {
+            print_help();
+            return Ok(());
+        }
+        _ => return Err(unknown_command(command)),
+    };
+    println!(
+        "{description}\n\nUsage: polyrover {usage}\n\nOptions:\n{options}  --json        Print the versioned JSON envelope\n  -h, --help    Show this help\n\nExample:\n  {example}"
+    );
+    Ok(())
+}
+
+fn unknown_command(command: &[String]) -> Error {
+    Error::Invalid(format!(
+        "unknown command `{}`; run `polyrover help` to list commands",
+        command.join(" ")
+    ))
 }
