@@ -1,14 +1,20 @@
 //! Resilient market WSS subscription client: connection lifecycle, ping,
 //! pong-timeout detection, reconnect, and event deduplication.
 
-use std::{
-    io::ErrorKind,
+use std::time::Duration;
+
+use futures_util::{SinkExt, StreamExt};
+use tokio::{
     net::TcpStream,
-    thread,
-    time::{Duration, Instant},
+    time::{sleep, sleep_until, Instant},
+};
+use tokio_tungstenite::{
+    connect_async,
+    tungstenite::{Error as WsError, Message},
+    MaybeTlsStream, WebSocketStream,
 };
 
-use tungstenite::{connect, stream::MaybeTlsStream, Message, WebSocket};
+type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
 use crate::{
     market_data::{TrackedEvent, Tracker},
@@ -36,7 +42,7 @@ pub struct TrackedMarketRead {
 }
 
 pub struct MarketWsClient {
-    socket: WebSocket<MaybeTlsStream<TcpStream>>,
+    socket: Socket,
     config: Config,
     stats: StreamStats,
     dedup: Deduplicator,
@@ -46,12 +52,27 @@ pub struct MarketWsClient {
     last_frame_at: Instant,
 }
 
+enum ReadWake {
+    Message(Option<std::result::Result<Message, WsError>>),
+    Ping,
+    PongTimeout,
+}
+
 impl MarketWsClient {
-    pub fn connect(config: Config) -> Result<Self> {
-        let socket = Self::dial(&config)?;
+    pub async fn connect(config: Config) -> Result<Self> {
+        let socket = Self::dial(&config).await?;
+        Ok(Self::from_socket(socket, config))
+    }
+
+    pub async fn connect_with_retries(config: Config) -> Result<Self> {
+        let socket = Self::dial_with_retries(&config).await?;
+        Ok(Self::from_socket(socket, config))
+    }
+
+    fn from_socket(socket: Socket, config: Config) -> Self {
         let mut stats = StreamStats::new("market");
         stats.mark_connected();
-        Ok(Self {
+        Self {
             socket,
             config,
             stats,
@@ -60,41 +81,26 @@ impl MarketWsClient {
             subscriptions: Vec::new(),
             last_ping: Instant::now(),
             last_frame_at: Instant::now(),
-        })
+        }
     }
 
-    pub fn connect_with_retries(config: Config) -> Result<Self> {
-        let socket = Self::dial_with_retries(&config)?;
-        let mut stats = StreamStats::new("market");
-        stats.mark_connected();
-        Ok(Self {
-            socket,
-            config,
-            stats,
-            dedup: Deduplicator::new(4096, 120_000),
-            tracker: Tracker::new(),
-            subscriptions: Vec::new(),
-            last_ping: Instant::now(),
-            last_frame_at: Instant::now(),
-        })
+    async fn dial(config: &Config) -> Result<Socket> {
+        connect_async(config.url.as_str())
+            .await
+            .map(|(socket, _)| socket)
+            .map_err(ws_err)
     }
 
-    fn dial(config: &Config) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
-        let (mut socket, _) = connect(config.url.as_str()).map_err(ws_err)?;
-        set_read_timeout(&mut socket, Duration::from_millis(100))?;
-        Ok(socket)
-    }
-
-    fn dial_with_retries(config: &Config) -> Result<WebSocket<MaybeTlsStream<TcpStream>>> {
+    async fn dial_with_retries(config: &Config) -> Result<Socket> {
         let delays = reconnect_delays(config);
         let mut last_err = None;
         for attempt in 0..=delays.len() {
-            match Self::dial(config) {
+            match Self::dial(config).await {
                 Ok(socket) => return Ok(socket),
                 Err(err) => last_err = Some(err),
             }
             if let Some(delay) = delays.get(attempt) {
-                thread::sleep(*delay);
+                sleep(*delay).await;
             }
         }
         Err(Error::ReconnectExhausted {
@@ -105,118 +111,143 @@ impl MarketWsClient {
         })
     }
 
-    pub fn subscribe_assets(&mut self, asset_ids: &[String]) -> Result<()> {
+    pub async fn subscribe_assets(&mut self, asset_ids: &[String]) -> Result<()> {
         let msg = market_subscription(asset_ids, &self.config)?;
         self.socket
             .send(Message::Text(msg.to_string().into()))
+            .await
             .map_err(ws_err)?;
         self.stats.set_subscriptions(asset_ids);
         self.subscriptions = asset_ids.to_vec();
         Ok(())
     }
 
-    pub fn read_raw_with_status(&mut self, observed_at_ms: i64) -> Result<MarketRead> {
+    async fn next_wake(&mut self) -> ReadWake {
+        let ping_deadline =
+            self.last_ping + Duration::from_secs(self.config.ping_interval_secs.max(1));
+        let pong_timeout = async {
+            if self.config.pong_timeout_secs == 0 {
+                std::future::pending::<()>().await;
+            } else {
+                sleep_until(
+                    self.last_frame_at + Duration::from_secs(self.config.pong_timeout_secs),
+                )
+                .await;
+            }
+        };
+        tokio::pin!(pong_timeout);
+        let socket = &mut self.socket;
+        tokio::select! {
+            message = socket.next() => ReadWake::Message(message),
+            _ = sleep_until(ping_deadline) => ReadWake::Ping,
+            _ = &mut pong_timeout => ReadWake::PongTimeout,
+        }
+    }
+
+    pub async fn read_raw_with_status(&mut self, observed_at_ms: i64) -> Result<MarketRead> {
         let mut reconnected = false;
-        if self.config.pong_timeout_secs > 0
-            && self.last_frame_at.elapsed() >= Duration::from_secs(self.config.pong_timeout_secs)
-        {
-            if !self.config.reconnect {
-                return Err(Error::WebSocket(format!(
-                    "no frame received within pong timeout ({}s)",
-                    self.config.pong_timeout_secs
-                )));
-            }
-            self.reconnect_and_resubscribe()?;
-            reconnected = true;
-        }
-        if self.last_ping.elapsed() >= Duration::from_secs(self.config.ping_interval_secs.max(1)) {
-            if let Err(err) = self.ping() {
-                if !self.config.reconnect {
-                    return Err(err);
+        loop {
+            let message = match self.next_wake().await {
+                ReadWake::Ping => {
+                    if let Err(err) = self.ping().await {
+                        if !self.config.reconnect {
+                            return Err(err);
+                        }
+                        self.reconnect_and_resubscribe().await?;
+                        reconnected = true;
+                    }
+                    continue;
                 }
-                self.reconnect_and_resubscribe()?;
-                reconnected = true;
-            }
-        }
-        let message = match self.socket.read() {
-            Ok(message) => {
-                self.last_frame_at = Instant::now();
-                message
-            }
-            Err(tungstenite::Error::Io(err))
-                if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-            {
+                ReadWake::PongTimeout => {
+                    if !self.config.reconnect {
+                        return Err(Error::WebSocket(format!(
+                            "no frame received within pong timeout ({}s)",
+                            self.config.pong_timeout_secs
+                        )));
+                    }
+                    self.reconnect_and_resubscribe().await?;
+                    reconnected = true;
+                    continue;
+                }
+                ReadWake::Message(Some(Ok(message))) => {
+                    self.last_frame_at = Instant::now();
+                    message
+                }
+                ReadWake::Message(Some(Err(err))) => {
+                    if !self.config.reconnect {
+                        return Err(ws_err(err));
+                    }
+                    self.reconnect_and_resubscribe().await?;
+                    reconnected = true;
+                    continue;
+                }
+                ReadWake::Message(None) => {
+                    if !self.config.reconnect {
+                        return Err(Error::WebSocket("websocket stream ended".into()));
+                    }
+                    self.reconnect_and_resubscribe().await?;
+                    reconnected = true;
+                    continue;
+                }
+            };
+            if matches!(&message, Message::Ping(_) | Message::Pong(_)) {
                 return Ok(MarketRead {
                     messages: Vec::new(),
-                    received_valid_frame: false,
+                    received_valid_frame: true,
                     invalid_frame: false,
                     reconnected,
                 });
             }
-            Err(_) if self.config.reconnect => {
-                self.reconnect_and_resubscribe()?;
-                reconnected = true;
-                self.socket.read().map_err(ws_err)?
+            let text = message_text(message)?;
+            if text.trim().eq_ignore_ascii_case("PONG") {
+                return Ok(MarketRead {
+                    messages: Vec::new(),
+                    received_valid_frame: true,
+                    invalid_frame: false,
+                    reconnected,
+                });
             }
-            Err(err) => return Err(ws_err(err)),
-        };
-        if matches!(&message, Message::Ping(_) | Message::Pong(_)) {
+            if !self.dedup.process_at(&text, observed_at_ms) {
+                self.stats.record_duplicate();
+                return Ok(MarketRead {
+                    messages: Vec::new(),
+                    received_valid_frame: true,
+                    invalid_frame: false,
+                    reconnected,
+                });
+            }
+            let values = raw_values_from_text(&text);
+            if values.is_empty() {
+                self.stats.record_invalid();
+                return Ok(MarketRead {
+                    messages: Vec::new(),
+                    received_valid_frame: false,
+                    invalid_frame: true,
+                    reconnected,
+                });
+            }
+            let mut messages = Vec::with_capacity(values.len());
+            for value in values {
+                let raw = RawMessage::from_payload(value, observed_at_ms);
+                self.stats.record_event(&raw.event_type, observed_at_ms);
+                messages.push(raw);
+            }
             return Ok(MarketRead {
-                messages: Vec::new(),
+                messages,
                 received_valid_frame: true,
                 invalid_frame: false,
                 reconnected,
             });
         }
-        let text = message_text(message)?;
-        if text.trim().eq_ignore_ascii_case("PONG") {
-            return Ok(MarketRead {
-                messages: Vec::new(),
-                received_valid_frame: true,
-                invalid_frame: false,
-                reconnected,
-            });
-        }
-        if !self.dedup.process_at(&text, observed_at_ms) {
-            self.stats.record_duplicate();
-            return Ok(MarketRead {
-                messages: Vec::new(),
-                received_valid_frame: true,
-                invalid_frame: false,
-                reconnected,
-            });
-        }
-        let values = raw_values_from_text(&text);
-        if values.is_empty() {
-            self.stats.record_invalid();
-            return Ok(MarketRead {
-                messages: Vec::new(),
-                received_valid_frame: false,
-                invalid_frame: true,
-                reconnected,
-            });
-        }
-        let mut messages = Vec::with_capacity(values.len());
-        for value in values {
-            let raw = RawMessage::from_payload(value, observed_at_ms);
-            self.stats.record_event(&raw.event_type, observed_at_ms);
-            messages.push(raw);
-        }
-        Ok(MarketRead {
-            messages,
-            received_valid_frame: true,
-            invalid_frame: false,
-            reconnected,
-        })
     }
 
-    pub fn read_raw(&mut self, observed_at_ms: i64) -> Result<Vec<RawMessage>> {
-        Ok(self.read_raw_with_status(observed_at_ms)?.messages)
+    pub async fn read_raw(&mut self, observed_at_ms: i64) -> Result<Vec<RawMessage>> {
+        Ok(self.read_raw_with_status(observed_at_ms).await?.messages)
     }
 
-    fn reconnect_and_resubscribe(&mut self) -> Result<()> {
+    async fn reconnect_and_resubscribe(&mut self) -> Result<()> {
         self.stats.mark_disconnected();
-        self.socket = Self::dial_with_retries(&self.config)?;
+        self.socket = Self::dial_with_retries(&self.config).await?;
         self.stats.mark_connected();
         self.stats.record_reconnect();
         self.last_ping = Instant::now();
@@ -225,18 +256,22 @@ impl MarketWsClient {
             return Ok(());
         }
         let subscriptions = self.subscriptions.clone();
-        self.subscribe_assets(&subscriptions)
+        self.subscribe_assets(&subscriptions).await
     }
 
-    pub fn read_events(&mut self, observed_at_ms: i64) -> Result<Vec<MarketEvent>> {
-        self.read_raw(observed_at_ms)?
+    pub async fn read_events(&mut self, observed_at_ms: i64) -> Result<Vec<MarketEvent>> {
+        self.read_raw(observed_at_ms)
+            .await?
             .into_iter()
             .map(|raw| parse_market_event(&raw.payload.to_string()))
             .collect()
     }
 
-    pub fn read_tracked_with_status(&mut self, observed_at_ms: i64) -> Result<TrackedMarketRead> {
-        let read = self.read_raw_with_status(observed_at_ms)?;
+    pub async fn read_tracked_with_status(
+        &mut self,
+        observed_at_ms: i64,
+    ) -> Result<TrackedMarketRead> {
+        let read = self.read_raw_with_status(observed_at_ms).await?;
         let events = read
             .messages
             .into_iter()
@@ -253,13 +288,14 @@ impl MarketWsClient {
         })
     }
 
-    pub fn read_tracked(&mut self, observed_at_ms: i64) -> Result<Vec<TrackedEvent>> {
-        Ok(self.read_tracked_with_status(observed_at_ms)?.events)
+    pub async fn read_tracked(&mut self, observed_at_ms: i64) -> Result<Vec<TrackedEvent>> {
+        Ok(self.read_tracked_with_status(observed_at_ms).await?.events)
     }
 
-    pub fn ping(&mut self) -> Result<()> {
+    pub async fn ping(&mut self) -> Result<()> {
         self.socket
             .send(Message::Text("PING".into()))
+            .await
             .map_err(ws_err)?;
         self.last_ping = Instant::now();
         Ok(())
@@ -269,8 +305,8 @@ impl MarketWsClient {
         self.stats.snapshot()
     }
 
-    pub fn close(mut self) -> Result<()> {
-        self.socket.close(None).map_err(ws_err)
+    pub async fn close(mut self) -> Result<()> {
+        self.socket.close(None).await.map_err(ws_err)
     }
 }
 
@@ -303,19 +339,7 @@ fn message_text(message: Message) -> Result<String> {
     }
 }
 
-fn set_read_timeout(
-    socket: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    timeout: Duration,
-) -> Result<()> {
-    let result = match socket.get_mut() {
-        MaybeTlsStream::Plain(stream) => stream.set_read_timeout(Some(timeout)),
-        MaybeTlsStream::Rustls(stream) => stream.sock.set_read_timeout(Some(timeout)),
-        _ => return Err(Error::Invalid("unsupported websocket transport".into())),
-    };
-    result.map_err(|err| Error::Invalid(format!("websocket read timeout: {err}")))
-}
-
-fn ws_err(err: tungstenite::Error) -> Error {
+fn ws_err(err: WsError) -> Error {
     Error::WebSocket(err.to_string())
 }
 
@@ -323,6 +347,7 @@ fn ws_err(err: tungstenite::Error) -> Error {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::thread;
 
     #[test]
     fn text_and_binary_messages_normalize() {
@@ -373,35 +398,45 @@ mod tests {
         .is_empty());
     }
 
-    #[test]
-    fn reads_typed_market_events_from_websocket() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    #[tokio::test]
+    async fn reads_typed_market_events_from_websocket() {
+        use futures_util::{SinkExt, StreamExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut socket = tungstenite::accept(stream).unwrap();
-            assert!(socket.read().unwrap().to_string().contains("token-1"));
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+            assert!(socket
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .to_string()
+                .contains("token-1"));
             socket
                 .send(Message::Text(
                     r#"{"event_type":"new_market","id":"market-1"}"#.into(),
                 ))
+                .await
                 .unwrap();
         });
         let mut client = MarketWsClient::connect(Config {
             url: format!("ws://{address}"),
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
         assert!(matches!(
-            client.read_events(1).unwrap().as_slice(),
+            client.read_events(1).await.unwrap().as_slice(),
             [crate::stream::MarketEvent::NewMarket(market)] if market.id == "market-1"
         ));
-        server.join().unwrap();
+        server.await.unwrap();
     }
 
-    #[test]
-    fn idle_connection_sends_text_heartbeat() {
+    #[tokio::test]
+    async fn idle_connection_sends_text_heartbeat() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -420,12 +455,13 @@ mod tests {
             ping_interval_secs: 1,
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
         let mut rows = Vec::new();
         for _ in 0..12 {
-            rows = client.read_raw(1).unwrap();
+            rows = client.read_raw(1).await.unwrap();
             if !rows.is_empty() {
                 break;
             }
@@ -434,8 +470,8 @@ mod tests {
         server.join().unwrap();
     }
 
-    #[test]
-    fn reconnects_and_resubscribes_after_reset() {
+    #[tokio::test]
+    async fn reconnects_and_resubscribes_after_reset() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -457,17 +493,18 @@ mod tests {
             url: format!("ws://{address}"),
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
-        let rows = client.read_raw(1).unwrap();
+        let rows = client.read_raw(1).await.unwrap();
 
         assert_eq!(rows[0].event_type, "new_market");
         server.join().unwrap();
     }
 
-    #[test]
-    fn reconnect_preserves_stream_stats_and_counts_the_reconnect() {
+    #[tokio::test]
+    async fn reconnect_preserves_stream_stats_and_counts_the_reconnect() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -494,12 +531,13 @@ mod tests {
             url: format!("ws://{address}"),
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
         let mut seen = Vec::new();
         while seen.len() < 2 {
-            for raw in client.read_raw(1).unwrap() {
+            for raw in client.read_raw(1).await.unwrap() {
                 seen.push(raw.payload["id"].as_str().unwrap_or_default().to_string());
             }
         }
@@ -511,8 +549,8 @@ mod tests {
         server.join().unwrap();
     }
 
-    #[test]
-    fn reconnect_preserves_dedup_so_replayed_messages_stay_suppressed() {
+    #[tokio::test]
+    async fn reconnect_preserves_dedup_so_replayed_messages_stay_suppressed() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -544,12 +582,13 @@ mod tests {
             url: format!("ws://{address}"),
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
         let mut seen = Vec::new();
         while seen.len() < 2 {
-            for raw in client.read_raw(1).unwrap() {
+            for raw in client.read_raw(1).await.unwrap() {
                 seen.push(raw.payload["hash"].as_str().unwrap_or_default().to_string());
             }
         }
@@ -558,8 +597,8 @@ mod tests {
         server.join().unwrap();
     }
 
-    #[test]
-    fn reconnect_without_subscriptions_sends_no_subscribe_frame() {
+    #[tokio::test]
+    async fn reconnect_without_subscriptions_sends_no_subscribe_frame() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -580,19 +619,20 @@ mod tests {
             url: format!("ws://{address}"),
             ..Default::default()
         })
+        .await
         .unwrap();
 
         let mut rows = Vec::new();
         while rows.is_empty() {
-            rows = client.read_raw(1).unwrap();
+            rows = client.read_raw(1).await.unwrap();
         }
         assert_eq!(rows[0].event_type, "new_market");
-        client.close().unwrap();
+        client.close().await.unwrap();
         server.join().unwrap();
     }
 
-    #[test]
-    fn silent_connection_past_pong_timeout_triggers_reconnect() {
+    #[tokio::test(start_paused = true)]
+    async fn silent_connection_past_pong_timeout_triggers_reconnect() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -617,8 +657,9 @@ mod tests {
             ping_interval_secs: 3600,
             ..Default::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut rows = Vec::new();
@@ -627,15 +668,15 @@ mod tests {
                 Instant::now() < deadline,
                 "client never reconnected away from the silent connection"
             );
-            rows = client.read_raw(1).unwrap();
+            rows = client.read_raw(1).await.unwrap();
         }
         assert_eq!(rows[0].event_type, "new_market");
         assert_eq!(client.stats().reconnects, 1);
         server.join().unwrap();
     }
 
-    #[test]
-    fn read_status_distinguishes_inbound_control_frame_from_timeout() {
+    #[tokio::test]
+    async fn read_status_distinguishes_inbound_control_frame_from_timeout() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = thread::spawn(move || {
@@ -648,9 +689,10 @@ mod tests {
             url: format!("ws://{address}"),
             ..Config::default()
         })
+        .await
         .unwrap();
-        client.subscribe_assets(&["token-1".into()]).unwrap();
-        let read = client.read_raw_with_status(1_000).unwrap();
+        client.subscribe_assets(&["token-1".into()]).await.unwrap();
+        let read = client.read_raw_with_status(1_000).await.unwrap();
         assert!(read.received_valid_frame);
         assert!(!read.invalid_frame);
         assert!(!read.reconnected);

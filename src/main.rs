@@ -54,7 +54,7 @@ async fn run() -> Result<()> {
         [group, cmd, rest @ ..] if group == "analytics" && cmd == "leaderboard" => {
             data_leaderboard(&client, rest).await
         }
-        [group, cmd, rest @ ..] if group == "stream" && cmd == "watch" => stream_watch(rest),
+        [group, cmd, rest @ ..] if group == "stream" && cmd == "watch" => stream_watch(rest).await,
         [group, cmd, rest @ ..] if group == "sim" && cmd == "reset" => sim_reset(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "buy" => sim_buy(rest),
         [group, cmd, rest @ ..] if group == "sim" && cmd == "sell" => sim_sell(rest),
@@ -198,7 +198,7 @@ fn paper_order(args: &[String]) -> paper::Order {
     }
 }
 
-fn stream_watch(args: &[String]) -> Result<()> {
+async fn stream_watch(args: &[String]) -> Result<()> {
     let tokens = flag_values(args, "--token-id");
     let limit: usize = flag(args, "--limit")
         .and_then(|v| v.parse().ok())
@@ -210,9 +210,9 @@ fn stream_watch(args: &[String]) -> Result<()> {
     if let Some(url) = flag(args, "--url") {
         config.url = url;
     }
-    let mut client = stream_client::MarketWsClient::connect_with_retries(config)?;
+    let mut client = stream_client::MarketWsClient::connect_with_retries(config).await?;
     if !tokens.is_empty() {
-        client.subscribe_assets(&tokens)?;
+        client.subscribe_assets(&tokens).await?;
     }
     let deadline = Instant::now() + Duration::from_secs(seconds.max(1));
     let mut events = Vec::new();
@@ -221,10 +221,10 @@ fn stream_watch(args: &[String]) -> Result<()> {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis() as i64)
             .unwrap_or_default();
-        events.extend(client.read_raw(now_ms)?);
+        events.extend(client.read_raw(now_ms).await?);
     }
     let stats = client.stats();
-    client.close()?;
+    let _ = tokio::time::timeout(Duration::from_secs(1), client.close()).await;
     print_success("stream watch", json!({"events": events, "stats": stats}))
 }
 
