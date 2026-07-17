@@ -71,6 +71,9 @@ fn top_level_help_groups_commands_and_points_to_detailed_help() {
     assert!(stdout.contains("Streaming:"));
     assert!(stdout.contains("Local simulation:"));
     assert!(stdout.contains("polyrover help <command>"));
+    assert!(stdout.contains("Search Gamma markets, events, and profiles"));
+    assert!(stdout.contains("Watch public market events"));
+    assert!(stdout.contains("Apply a local paper buy"));
 }
 
 #[test]
@@ -159,4 +162,27 @@ fn unknown_help_targets_fail_with_the_same_hint() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("unknown command `gama search`"));
     assert!(stderr.contains("polyrover help"));
+}
+
+#[test]
+fn command_groups_have_help_through_both_help_forms() {
+    for (group, subcommand) in [
+        ("gamma", "search"),
+        ("clob", "book"),
+        ("analytics", "positions"),
+        ("stream", "watch"),
+        ("sim", "reset"),
+    ] {
+        for args in [vec!["help", group], vec![group, "--help"]] {
+            let output = Command::new(env!("CARGO_BIN_EXE_polyrover"))
+                .args(args)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            assert!(output.status.success(), "help failed for {group}");
+            assert!(stdout.contains(&format!("Usage: polyrover {group} <command>")));
+            assert!(stdout.contains(&format!("  {subcommand}")));
+            assert!(stdout.contains(&format!("polyrover help {group} <command>")));
+        }
+    }
 }

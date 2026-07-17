@@ -247,10 +247,40 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 }
 
 fn print_help() {
-    println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping\n    gamma search\n    gamma markets\n    clob book\n    clob price\n    clob simulate\n    analytics positions\n    analytics trades\n    analytics leaderboard\n\n  Streaming:\n    stream watch\n\n  Local simulation:\n    sim reset\n    sim buy\n    sim sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.");
+    println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping                       Check API health\n    gamma search               Search Gamma markets, events, and profiles\n    gamma markets              List Gamma markets\n    clob book                  Fetch an order book\n    clob price                 Fetch a side price\n    clob simulate              Estimate a fill\n    analytics positions        Fetch wallet positions\n    analytics trades           Fetch wallet trades\n    analytics leaderboard      Fetch the trader leaderboard\n\n  Streaming:\n    stream watch               Watch public market events\n\n  Local simulation:\n    sim reset                  Create a fresh paper state\n    sim buy                    Apply a local paper buy\n    sim sell                   Apply a local paper sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.");
 }
 
 fn print_command_help(command: &[String]) -> Result<()> {
+    if let [group] = command {
+        let details = match group.as_str() {
+            "gamma" => Some((
+                "Query public Gamma discovery APIs.",
+                "  search     Search markets, events, and profiles\n  markets    List markets",
+            )),
+            "clob" => Some((
+                "Read public CLOB data and estimate fills.",
+                "  book        Fetch an order book\n  price       Fetch a side price\n  simulate    Estimate a fill",
+            )),
+            "analytics" => Some((
+                "Read public wallet and leaderboard data.",
+                "  positions      Fetch wallet positions\n  trades         Fetch wallet trades\n  leaderboard    Fetch the trader leaderboard",
+            )),
+            "stream" => Some((
+                "Read public market WebSocket events.",
+                "  watch    Watch market events",
+            )),
+            "sim" => Some((
+                "Apply local paper-state operations.",
+                "  reset    Create a fresh state\n  buy      Apply a paper buy\n  sell     Apply a paper sell",
+            )),
+            _ => None,
+        };
+        if let Some((description, commands)) = details {
+            print_group_help(group, description, commands);
+            return Ok(());
+        }
+    }
+
     let (description, usage, options, example) = match command {
         [command] if command == "ping" => (
             "Check Gamma, CLOB, and Data API health.",
@@ -340,6 +370,12 @@ fn print_command_help(command: &[String]) -> Result<()> {
         "{description}\n\nUsage: polyrover {usage}\n\nOptions:\n{options}  --json        Print the versioned JSON envelope\n  -h, --help    Show this help\n\nExample:\n  {example}"
     );
     Ok(())
+}
+
+fn print_group_help(group: &str, description: &str, commands: &str) {
+    println!(
+        "{description}\n\nUsage: polyrover {group} <command> [options]\n\nCommands:\n{commands}\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help {group} <command>` for command-specific details."
+    );
 }
 
 fn unknown_command(command: &[String]) -> Error {
