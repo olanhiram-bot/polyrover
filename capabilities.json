@@ -2469,13 +2469,14 @@
       "summary": "Markets list.",
       "status": "implemented",
       "api": [
-        "gamma::Client::markets"
+        "gamma::Client::markets",
+        "gamma::Client::market_page"
       ],
       "tests": [
         "tests/client.rs"
       ],
       "guard": null,
-      "notes": null
+      "notes": "market_page uses Gamma keyset pagination with opaque after_cursor/next_cursor tokens for catalogs beyond the offset limit."
     },
     {
       "id": "markets.search",

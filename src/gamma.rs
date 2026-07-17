@@ -2,7 +2,7 @@
 
 use crate::{
     transport,
-    types::{Event, HealthResponse, Market, SearchResponse},
+    types::{Event, HealthResponse, Market, MarketPage, SearchResponse},
     Result,
 };
 
@@ -42,6 +42,12 @@ impl Client {
 
     pub async fn markets(&self, params: &MarketParams) -> Result<Vec<Market>> {
         self.transport.get_json(&params.path("/markets")).await
+    }
+
+    pub async fn market_page(&self, params: &MarketKeysetParams) -> Result<MarketPage> {
+        self.transport
+            .get_json(&params.path("/markets/keyset"))
+            .await
     }
 
     pub async fn market_by_id(&self, id: &str) -> Result<Market> {
@@ -88,6 +94,20 @@ pub struct MarketParams {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MarketKeysetParams {
+    pub limit: Option<u32>,
+    pub after_cursor: String,
+    pub order: Option<String>,
+    pub ascending: Option<bool>,
+    pub slug: Vec<String>,
+    pub condition_ids: Vec<String>,
+    pub clob_token_ids: Vec<String>,
+    pub active: Option<bool>,
+    pub closed: Option<bool>,
+    pub tag_id: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct EventParams {
     pub limit: Option<u32>,
     pub offset: Option<u32>,
@@ -114,6 +134,23 @@ impl MarketParams {
         let mut q = Query::new(base);
         q.opt("limit", self.limit);
         q.opt("offset", self.offset);
+        q.opt_str("order", self.order.as_deref());
+        q.opt("ascending", self.ascending);
+        q.opt("active", self.active);
+        q.opt("closed", self.closed);
+        q.opt("tag_id", self.tag_id);
+        q.list("slug", &self.slug);
+        q.list("condition_ids", &self.condition_ids);
+        q.list("clob_token_ids", &self.clob_token_ids);
+        q.finish()
+    }
+}
+
+impl MarketKeysetParams {
+    pub fn path(&self, base: &str) -> String {
+        let mut q = Query::new(base);
+        q.opt("limit", self.limit);
+        q.pair("after_cursor", &self.after_cursor);
         q.opt_str("order", self.order.as_deref());
         q.opt("ascending", self.ascending);
         q.opt("active", self.active);

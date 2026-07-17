@@ -9,7 +9,7 @@ use std::{
 
 use polyrover::{
     data::{ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
-    gamma::{MarketParams, SearchParams},
+    gamma::{MarketKeysetParams, MarketParams, SearchParams},
     simulation::Request,
     stream::{parse_market_event, MarketEvent},
     Client, ClientConfig,
@@ -147,6 +147,36 @@ async fn client_lists_markets_through_one_public_interface() {
     let request = received.recv().unwrap();
     assert!(request.starts_with("GET /markets?"));
     assert!(request.contains("limit=5"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_pages_gamma_markets_with_keyset_cursor() {
+    let (gamma_base_url, received, server) =
+        serve_json(r#"{"markets":[{"id":"market-1"}],"next_cursor":"opaque next"}"#);
+    let client = Client::new(ClientConfig {
+        gamma_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let page = client
+        .market_page(&MarketKeysetParams {
+            limit: Some(100),
+            after_cursor: "opaque previous".into(),
+            closed: Some(true),
+            ..MarketKeysetParams::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(page.markets[0].id, "market-1");
+    assert_eq!(page.next_cursor, "opaque next");
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /markets/keyset?"));
+    assert!(request.contains("limit=100"));
+    assert!(request.contains("after_cursor=opaque%20previous"));
+    assert!(request.contains("closed=true"));
     server.join().unwrap();
 }
 
