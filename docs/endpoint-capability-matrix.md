@@ -15,7 +15,7 @@ Taxonomy parity does not imply implementation parity.
 
 | Surface | Method/event | Endpoint/channel | Transport | Auth level | Cargo feature | Status | Rust API | Test |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Gamma | Search/markets/events | `gamma-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/gamma.rs`](../src/gamma.rs) | [`tests/client.rs`](../tests/client.rs) |
+| Gamma | Search, offset/keyset markets, and events | `gamma-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/gamma.rs`](../src/gamma.rs) | [`tests/client.rs`](../tests/client.rs) |
 | CLOB | Books/prices/market metadata | `clob.polymarket.com` | HTTPS | none | `public` | implemented | [`src/clob.rs`](../src/clob.rs) | [`tests/client.rs`](../tests/client.rs) |
 | Data API | Positions, paginated closed positions/trades/activity, holders, and filtered leaderboards | `data-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/data.rs`](../src/data.rs) | [`tests/client.rs`](../tests/client.rs) |
 | Market WSS | Book/price/trade/tick/lifecycle events | `/ws/market` | WSS | none | `public` | implemented | [`src/stream_client.rs`](../src/stream_client.rs) | [`src/stream_client.rs`](../src/stream_client.rs) |
@@ -54,6 +54,6 @@ Taxonomy parity does not imply implementation parity.
 
 ## Official references
 
-- [Gamma Markets API overview](https://docs.polymarket.com/developers/gamma-markets-api/overview)
+- [Gamma keyset market pagination](https://docs.polymarket.com/api-reference/markets/list-markets-keyset-pagination)
 - [CLOB authentication](https://docs.polymarket.com/developers/CLOB/authentication)
 - [CLOB market WebSocket channel](https://docs.polymarket.com/developers/CLOB/websocket/market-channel)

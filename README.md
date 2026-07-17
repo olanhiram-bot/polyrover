@@ -21,7 +21,7 @@ into typed Rust models, stable JSON, and local fill simulations.
 
 ## What you get
 
-- **Gamma** — Search, markets, events, and crypto-window discovery. [`src/gamma.rs`](src/gamma.rs)
+- **Gamma** — Search, offset/keyset market pagination, events, and crypto-window discovery. [`src/gamma.rs`](src/gamma.rs)
 - **Public CLOB** — Books, prices, spreads, tick sizes, and market metadata. [`src/clob.rs`](src/clob.rs)
 - **Data API** — Positions, trades, activity, holders, volume, and leaderboards. [`src/data.rs`](src/data.rs)
 - **Market WSS** — Typed events with heartbeat, reconnect, deduplication, and tracking. [`src/stream_client.rs`](src/stream_client.rs)
