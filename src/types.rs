@@ -137,6 +137,14 @@ pub struct Market {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct MarketPage {
+    #[serde(default)]
+    pub markets: Vec<Market>,
+    #[serde(default)]
+    pub next_cursor: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct Event {
     #[serde(default)]
     pub id: String,

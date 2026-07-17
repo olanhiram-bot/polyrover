@@ -5,9 +5,9 @@ use crate::{
     clob,
     data::{self, ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
     data_types::{Activity, ClosedPosition, LeaderboardRow, Position, Trade},
-    gamma::{self, MarketParams, SearchParams},
+    gamma::{self, MarketKeysetParams, MarketParams, SearchParams},
     simulation::{self, Request as SimulationRequest, ResultRow as SimulationResult},
-    types::{ClobOrderBook, Market, SearchResponse},
+    types::{ClobOrderBook, Market, MarketPage, SearchResponse},
     Result,
 };
 use serde::Serialize;
@@ -61,6 +61,10 @@ impl Client {
 
     pub async fn markets(&self, params: &MarketParams) -> Result<Vec<Market>> {
         self.gamma.markets(params).await
+    }
+
+    pub async fn market_page(&self, params: &MarketKeysetParams) -> Result<MarketPage> {
+        self.gamma.market_page(params).await
     }
 
     pub async fn market_by_slug(&self, slug: &str) -> Result<Market> {
