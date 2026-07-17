@@ -68,7 +68,7 @@ pub struct Position {
 pub struct ClosedPosition {
     #[serde(flatten)]
     pub position: Position,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_number")]
     pub timestamp: String,
 }
 
@@ -76,9 +76,14 @@ pub struct ClosedPosition {
 pub struct Trade {
     #[serde(default)]
     pub id: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "market",
+        alias = "condition_id",
+        rename = "conditionId"
+    )]
     pub market: String,
-    #[serde(default)]
+    #[serde(default, alias = "asset_id", rename = "asset")]
     pub asset_id: String,
     #[serde(default, rename = "proxyWallet")]
     pub proxy_wallet: String,
@@ -88,16 +93,36 @@ pub struct Trade {
     pub price: f64,
     #[serde(default, deserialize_with = "float_or_zero")]
     pub size: f64,
-    #[serde(default, deserialize_with = "int_or_zero")]
+    #[serde(
+        default,
+        alias = "fee_rate_bps",
+        rename = "feeRateBps",
+        deserialize_with = "int_or_zero"
+    )]
     pub fee_rate_bps: i64,
     #[serde(default)]
     pub outcome: String,
     #[serde(default)]
     pub status: String,
-    #[serde(default)]
+    #[serde(default, alias = "transaction_hash", rename = "transactionHash")]
     pub transaction_hash: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "created_at",
+        rename = "timestamp",
+        deserialize_with = "string_or_number"
+    )]
     pub created_at: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default, alias = "event_slug", rename = "eventSlug")]
+    pub event_slug: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub pseudonym: String,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -106,9 +131,13 @@ pub struct Trade {
 pub struct Activity {
     #[serde(default, rename = "type")]
     pub activity_type: String,
+    #[serde(default, rename = "proxyWallet")]
+    pub proxy_wallet: String,
     #[serde(default)]
     pub market: String,
-    #[serde(default)]
+    #[serde(default, alias = "condition_id", rename = "conditionId")]
+    pub condition_id: String,
+    #[serde(default, alias = "asset_id", rename = "asset")]
     pub asset_id: String,
     #[serde(default)]
     pub side: String,
@@ -116,8 +145,36 @@ pub struct Activity {
     pub price: String,
     #[serde(default, deserialize_with = "string_or_number")]
     pub size: String,
+    #[serde(
+        default,
+        alias = "usdc_size",
+        rename = "usdcSize",
+        deserialize_with = "string_or_number"
+    )]
+    pub usdc_size: String,
+    #[serde(default, alias = "transaction_hash", rename = "transactionHash")]
+    pub transaction_hash: String,
     #[serde(default, deserialize_with = "string_or_number")]
     pub timestamp: String,
+    #[serde(default)]
+    pub outcome: String,
+    #[serde(default, rename = "outcomeIndex", deserialize_with = "int_or_zero")]
+    pub outcome_index: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default, alias = "event_slug", rename = "eventSlug")]
+    pub event_slug: String,
+    #[serde(
+        default,
+        alias = "is_combo",
+        rename = "isCombo",
+        deserialize_with = "bool_or_false"
+    )]
+    pub is_combo: bool,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -170,14 +227,24 @@ pub struct OpenInterest {
 pub struct LeaderboardRow {
     #[serde(default, deserialize_with = "int_or_zero")]
     pub rank: i64,
-    #[serde(default, alias = "proxyWallet", alias = "userName")]
+    #[serde(default)]
     pub user: String,
+    #[serde(default, rename = "proxyWallet")]
+    pub proxy_wallet: String,
+    #[serde(default, rename = "userName")]
+    pub user_name: String,
     #[serde(default, alias = "vol", deserialize_with = "float_or_zero")]
     pub volume: f64,
     #[serde(default, deserialize_with = "float_or_zero")]
     pub pnl: f64,
     #[serde(default, rename = "roi", deserialize_with = "float_or_zero")]
     pub roi: f64,
+    #[serde(default, rename = "profileImage")]
+    pub profile_image: String,
+    #[serde(default, rename = "xUsername")]
+    pub x_username: String,
+    #[serde(default, rename = "verifiedBadge", deserialize_with = "bool_or_false")]
+    pub verified_badge: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]

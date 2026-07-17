@@ -2,8 +2,9 @@
 //! plus aggregate health reporting.
 
 use crate::{
-    clob, data,
-    data_types::{LeaderboardRow, Position, Trade},
+    clob,
+    data::{self, ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
+    data_types::{Activity, ClosedPosition, LeaderboardRow, Position, Trade},
     gamma::{self, MarketParams, SearchParams},
     simulation::{self, Request as SimulationRequest, ResultRow as SimulationResult},
     types::{ClobOrderBook, Market, SearchResponse},
@@ -82,12 +83,42 @@ impl Client {
         self.data.current_positions(user, limit).await
     }
 
+    pub async fn closed_positions(&self, user: &str, limit: u32) -> Result<Vec<ClosedPosition>> {
+        self.data.closed_positions(user, limit).await
+    }
+
+    pub async fn closed_positions_with(
+        &self,
+        params: &ClosedPositionParams,
+    ) -> Result<Vec<ClosedPosition>> {
+        self.data.closed_positions_with(params).await
+    }
+
     pub async fn trades(&self, user: &str, limit: u32) -> Result<Vec<Trade>> {
         self.data.trades(user, limit).await
     }
 
+    pub async fn trades_with(&self, params: &TradeParams) -> Result<Vec<Trade>> {
+        self.data.trades_with(params).await
+    }
+
+    pub async fn activity(&self, user: &str, limit: u32) -> Result<Vec<Activity>> {
+        self.data.activity(user, limit).await
+    }
+
+    pub async fn activity_with(&self, params: &ActivityParams) -> Result<Vec<Activity>> {
+        self.data.activity_with(params).await
+    }
+
     pub async fn trader_leaderboard(&self, limit: u32) -> Result<Vec<LeaderboardRow>> {
         self.data.trader_leaderboard(limit).await
+    }
+
+    pub async fn trader_leaderboard_with(
+        &self,
+        params: &LeaderboardParams,
+    ) -> Result<Vec<LeaderboardRow>> {
+        self.data.trader_leaderboard_with(params).await
     }
 
     pub async fn health(&self) -> ClientHealth {

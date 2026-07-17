@@ -97,6 +97,42 @@ async fn main() -> polyrover::Result<()> {
 }
 ```
 
+Paginated wallet research uses typed Data API parameters while the original
+limit-only helpers remain available:
+
+```rust
+use polyrover::{
+    data::{ClosedPositionParams, LeaderboardParams},
+    Client, ClientConfig,
+};
+
+# async fn research() -> polyrover::Result<()> {
+let client = Client::new(ClientConfig::default())?;
+let leaders = client
+    .trader_leaderboard_with(&LeaderboardParams {
+        category: "POLITICS".into(),
+        time_period: "MONTH".into(),
+        order_by: "PNL".into(),
+        limit: Some(50),
+        offset: Some(0),
+        ..Default::default()
+    })
+    .await?;
+if let Some(leader) = leaders.first() {
+    let closed = client
+        .closed_positions_with(&ClosedPositionParams {
+            user: leader.proxy_wallet.clone(),
+            limit: Some(50),
+            offset: Some(0),
+            ..Default::default()
+        })
+        .await?;
+    println!("closed positions: {}", closed.len());
+}
+# Ok(())
+# }
+```
+
 Network clients use async `reqwest` and `tokio-tungstenite`. DTO parsing, book
 math, simulation, HMAC helpers, and address derivation remain synchronous.
 

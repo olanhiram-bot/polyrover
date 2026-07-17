@@ -8,6 +8,7 @@ use std::{
 };
 
 use polyrover::{
+    data::{ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
     gamma::{MarketParams, SearchParams},
     simulation::Request,
     stream::{parse_market_event, MarketEvent},
@@ -202,6 +203,157 @@ async fn client_reads_leaderboard_through_one_public_interface() {
     let request = received.recv().unwrap();
     assert!(request.starts_with("GET /v1/leaderboard?"));
     assert!(request.contains("limit=9"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_reads_filtered_leaderboard_pages() {
+    let (data_base_url, received, server) =
+        serve_json(r#"[{"rank":"1","proxyWallet":"0xabc","userName":"alice","vol":100,"pnl":25}]"#);
+    let client = Client::new(ClientConfig {
+        data_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let rows = client
+        .trader_leaderboard_with(&LeaderboardParams {
+            category: "POLITICS".into(),
+            time_period: "MONTH".into(),
+            order_by: "PNL".into(),
+            limit: Some(50),
+            offset: Some(100),
+            ..LeaderboardParams::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(rows[0].proxy_wallet, "0xabc");
+    assert_eq!(rows[0].user_name, "alice");
+    assert_eq!(rows[0].user, "0xabc");
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /v1/leaderboard?"));
+    assert!(request.contains("category=POLITICS"));
+    assert!(request.contains("timePeriod=MONTH"));
+    assert!(request.contains("orderBy=PNL"));
+    assert!(request.contains("limit=50"));
+    assert!(request.contains("offset=100"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_reads_filtered_closed_position_pages() {
+    let (data_base_url, received, server) = serve_json(
+        r#"[{"proxyWallet":"0xabc","asset":"token-1","conditionId":"0xmarket","realizedPnl":25,"timestamp":123}]"#,
+    );
+    let client = Client::new(ClientConfig {
+        data_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let rows = client
+        .closed_positions_with(&ClosedPositionParams {
+            user: "0xabc".into(),
+            markets: vec!["0xmarket".into(), "0xmarket2".into()],
+            limit: Some(50),
+            offset: Some(150),
+            sort_by: "REALIZEDPNL".into(),
+            sort_direction: "DESC".into(),
+            ..ClosedPositionParams::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(rows[0].position.proxy_wallet, "0xabc");
+    assert_eq!(rows[0].position.realized_pnl, 25.0);
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /closed-positions?"));
+    assert!(request.contains("user=0xabc"));
+    assert!(request.contains("market=0xmarket%2C0xmarket2"));
+    assert!(request.contains("limit=50"));
+    assert!(request.contains("offset=150"));
+    assert!(request.contains("sortBy=REALIZEDPNL"));
+    assert!(request.contains("sortDirection=DESC"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_reads_filtered_trade_pages() {
+    let (data_base_url, received, server) = serve_json(
+        r#"[{"proxyWallet":"0xabc","asset":"token-1","conditionId":"0xmarket","transactionHash":"0xtx","timestamp":123}]"#,
+    );
+    let client = Client::new(ClientConfig {
+        data_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let rows = client
+        .trades_with(&TradeParams {
+            user: "0xabc".into(),
+            side: "BUY".into(),
+            start: Some(1),
+            end: Some(123),
+            limit: Some(100),
+            offset: Some(200),
+            ..TradeParams::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(rows[0].proxy_wallet, "0xabc");
+    assert_eq!(rows[0].asset_id, "token-1");
+    assert_eq!(rows[0].market, "0xmarket");
+    assert_eq!(rows[0].transaction_hash, "0xtx");
+    assert_eq!(rows[0].created_at, "123");
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /trades?"));
+    assert!(request.contains("user=0xabc"));
+    assert!(request.contains("side=BUY"));
+    assert!(request.contains("start=1"));
+    assert!(request.contains("end=123"));
+    assert!(request.contains("limit=100"));
+    assert!(request.contains("offset=200"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_reads_filtered_activity_pages() {
+    let (data_base_url, received, server) = serve_json(
+        r#"[{"proxyWallet":"0xabc","type":"TRADE","conditionId":"0xmarket","usdcSize":50,"transactionHash":"0xtx","timestamp":123}]"#,
+    );
+    let client = Client::new(ClientConfig {
+        data_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let rows = client
+        .activity_with(&ActivityParams {
+            user: "0xabc".into(),
+            activity_types: vec!["TRADE".into(), "REDEEM".into()],
+            sort_by: "TIMESTAMP".into(),
+            sort_direction: "DESC".into(),
+            limit: Some(100),
+            offset: Some(300),
+            ..ActivityParams::default()
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(rows[0].proxy_wallet, "0xabc");
+    assert_eq!(rows[0].condition_id, "0xmarket");
+    assert_eq!(rows[0].transaction_hash, "0xtx");
+    assert_eq!(rows[0].usdc_size, "50");
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /activity?"));
+    assert!(request.contains("user=0xabc"));
+    assert!(request.contains("type=TRADE%2CREDEEM"));
+    assert!(request.contains("sortBy=TIMESTAMP"));
+    assert!(request.contains("sortDirection=DESC"));
+    assert!(request.contains("limit=100"));
+    assert!(request.contains("offset=300"));
     server.join().unwrap();
 }
 

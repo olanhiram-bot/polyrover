@@ -12,6 +12,59 @@ use crate::{
 
 pub const DEFAULT_BASE_URL: &str = "https://data-api.polymarket.com";
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ClosedPositionParams {
+    pub user: String,
+    pub markets: Vec<String>,
+    pub title: String,
+    pub event_ids: Vec<u64>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub sort_by: String,
+    pub sort_direction: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TradeParams {
+    pub user: String,
+    pub markets: Vec<String>,
+    pub event_ids: Vec<u64>,
+    pub side: String,
+    pub start: Option<u64>,
+    pub end: Option<u64>,
+    pub taker_only: Option<bool>,
+    pub filter_type: String,
+    pub filter_amount: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ActivityParams {
+    pub user: String,
+    pub markets: Vec<String>,
+    pub event_ids: Vec<u64>,
+    pub activity_types: Vec<String>,
+    pub side: String,
+    pub start: Option<u64>,
+    pub end: Option<u64>,
+    pub sort_by: String,
+    pub sort_direction: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct LeaderboardParams {
+    pub category: String,
+    pub time_period: String,
+    pub order_by: String,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+    pub user: String,
+    pub user_name: String,
+}
+
 #[derive(Clone)]
 pub struct Client {
     transport: transport::Client,
@@ -42,33 +95,56 @@ impl Client {
     }
 
     pub async fn closed_positions(&self, user: &str, limit: u32) -> Result<Vec<ClosedPosition>> {
+        self.closed_positions_with(&ClosedPositionParams {
+            user: user.into(),
+            limit: Some(limit),
+            ..ClosedPositionParams::default()
+        })
+        .await
+    }
+
+    pub async fn closed_positions_with(
+        &self,
+        params: &ClosedPositionParams,
+    ) -> Result<Vec<ClosedPosition>> {
         self.transport
-            .get_json(&path(
-                "/closed-positions",
-                &[pair("user", user), limit_pair(limit)],
-            ))
+            .get_json(&params.path("/closed-positions"))
             .await
     }
 
     pub async fn trades(&self, user: &str, limit: u32) -> Result<Vec<Trade>> {
-        self.transport
-            .get_json(&path("/trades", &[pair("user", user), limit_pair(limit)]))
-            .await
+        self.trades_with(&TradeParams {
+            user: user.into(),
+            limit: Some(limit),
+            ..TradeParams::default()
+        })
+        .await
+    }
+
+    pub async fn trades_with(&self, params: &TradeParams) -> Result<Vec<Trade>> {
+        self.transport.get_json(&params.path("/trades")).await
     }
 
     pub async fn market_trades(&self, market: &str, limit: u32) -> Result<Vec<Trade>> {
-        self.transport
-            .get_json(&path(
-                "/trades",
-                &[pair("market", market), limit_pair(limit)],
-            ))
-            .await
+        self.trades_with(&TradeParams {
+            markets: vec![market.into()],
+            limit: Some(limit),
+            ..TradeParams::default()
+        })
+        .await
     }
 
     pub async fn activity(&self, user: &str, limit: u32) -> Result<Vec<Activity>> {
-        self.transport
-            .get_json(&path("/activity", &[pair("user", user), limit_pair(limit)]))
-            .await
+        self.activity_with(&ActivityParams {
+            user: user.into(),
+            limit: Some(limit),
+            ..ActivityParams::default()
+        })
+        .await
+    }
+
+    pub async fn activity_with(&self, params: &ActivityParams) -> Result<Vec<Activity>> {
+        self.transport.get_json(&params.path("/activity")).await
     }
 
     pub async fn top_holders(&self, market: &str, limit: u32) -> Result<Vec<Holder>> {
@@ -137,9 +213,31 @@ impl Client {
     }
 
     pub async fn trader_leaderboard(&self, limit: u32) -> Result<Vec<LeaderboardRow>> {
-        self.transport
-            .get_json(&path("/v1/leaderboard", &[limit_pair(limit)]))
-            .await
+        self.trader_leaderboard_with(&LeaderboardParams {
+            limit: Some(limit),
+            ..LeaderboardParams::default()
+        })
+        .await
+    }
+
+    pub async fn trader_leaderboard_with(
+        &self,
+        params: &LeaderboardParams,
+    ) -> Result<Vec<LeaderboardRow>> {
+        let mut rows: Vec<LeaderboardRow> = self
+            .transport
+            .get_json(&params.path("/v1/leaderboard"))
+            .await?;
+        for row in &mut rows {
+            if row.user.is_empty() {
+                row.user.clone_from(if row.proxy_wallet.is_empty() {
+                    &row.user_name
+                } else {
+                    &row.proxy_wallet
+                });
+            }
+        }
+        Ok(rows)
     }
 
     pub async fn live_volume(&self, event_id: u32) -> Result<LiveVolumeResponse> {
@@ -157,6 +255,83 @@ impl Client {
     }
 }
 
+impl ClosedPositionParams {
+    fn path(&self, base: &str) -> String {
+        path(
+            base,
+            &[
+                pair("user", &self.user),
+                csv_pair("market", &self.markets),
+                pair("title", &self.title),
+                csv_pair("eventId", &self.event_ids),
+                number_pair("limit", self.limit),
+                number_pair("offset", self.offset),
+                pair("sortBy", &self.sort_by),
+                pair("sortDirection", &self.sort_direction),
+            ],
+        )
+    }
+}
+
+impl TradeParams {
+    fn path(&self, base: &str) -> String {
+        path(
+            base,
+            &[
+                number_pair("limit", self.limit),
+                number_pair("offset", self.offset),
+                bool_pair("takerOnly", self.taker_only),
+                pair("filterType", &self.filter_type),
+                pair("filterAmount", &self.filter_amount),
+                csv_pair("market", &self.markets),
+                csv_pair("eventId", &self.event_ids),
+                pair("user", &self.user),
+                pair("side", &self.side),
+                number_pair("start", self.start),
+                number_pair("end", self.end),
+            ],
+        )
+    }
+}
+
+impl ActivityParams {
+    fn path(&self, base: &str) -> String {
+        path(
+            base,
+            &[
+                number_pair("limit", self.limit),
+                number_pair("offset", self.offset),
+                pair("user", &self.user),
+                csv_pair("market", &self.markets),
+                csv_pair("eventId", &self.event_ids),
+                csv_pair("type", &self.activity_types),
+                number_pair("start", self.start),
+                number_pair("end", self.end),
+                pair("sortBy", &self.sort_by),
+                pair("sortDirection", &self.sort_direction),
+                pair("side", &self.side),
+            ],
+        )
+    }
+}
+
+impl LeaderboardParams {
+    fn path(&self, base: &str) -> String {
+        path(
+            base,
+            &[
+                pair("category", &self.category),
+                pair("timePeriod", &self.time_period),
+                pair("orderBy", &self.order_by),
+                number_pair("limit", self.limit),
+                number_pair("offset", self.offset),
+                pair("user", &self.user),
+                pair("userName", &self.user_name),
+            ],
+        )
+    }
+}
+
 #[derive(Deserialize)]
 struct HolderGroup {
     #[serde(default)]
@@ -169,6 +344,27 @@ fn pair(key: &str, value: &str) -> Option<(String, String)> {
 
 fn limit_pair(limit: u32) -> Option<(String, String)> {
     (limit > 0).then(|| ("limit".into(), limit.to_string()))
+}
+
+fn number_pair<T: ToString>(key: &str, value: Option<T>) -> Option<(String, String)> {
+    value.map(|value| (key.into(), value.to_string()))
+}
+
+fn bool_pair(key: &str, value: Option<bool>) -> Option<(String, String)> {
+    number_pair(key, value)
+}
+
+fn csv_pair<T: ToString>(key: &str, values: &[T]) -> Option<(String, String)> {
+    (!values.is_empty()).then(|| {
+        (
+            key.into(),
+            values
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    })
 }
 
 fn path(base: &str, pairs: &[Option<(String, String)>]) -> String {
