@@ -1848,13 +1848,14 @@
       "summary": "Data activity read.",
       "status": "implemented",
       "api": [
-        "data::Client::activity"
+        "data::Client::activity",
+        "data::Client::activity_with"
       ],
       "tests": [
-        "src/data.rs"
+        "tests/client.rs"
       ],
       "guard": null,
-      "notes": null
+      "notes": "ActivityParams supports wallet, market/event, activity type, side, time, sorting, limit, and offset filters."
     },
     {
       "id": "data.builderLeaderboard.read",
@@ -1921,13 +1922,14 @@
       "summary": "Data closed positions read.",
       "status": "implemented",
       "api": [
-        "data::Client::closed_positions"
+        "data::Client::closed_positions",
+        "data::Client::closed_positions_with"
       ],
       "tests": [
-        "src/data.rs"
+        "tests/client.rs"
       ],
       "guard": null,
-      "notes": null
+      "notes": "ClosedPositionParams supports wallet, market/event, title, sorting, limit, and offset filters."
     },
     {
       "id": "data.holders.read",
@@ -1975,13 +1977,14 @@
       "summary": "Data leaderboard read.",
       "status": "implemented",
       "api": [
-        "data::Client::trader_leaderboard"
+        "data::Client::trader_leaderboard",
+        "data::Client::trader_leaderboard_with"
       ],
       "tests": [
         "tests/client.rs"
       ],
       "guard": null,
-      "notes": null
+      "notes": "LeaderboardParams supports category, timeframe, ordering, wallet/username, limit, and offset filters."
     },
     {
       "id": "data.marketTrades.read",
@@ -2127,13 +2130,14 @@
       "summary": "Data trades read.",
       "status": "implemented",
       "api": [
-        "data::Client::trades"
+        "data::Client::trades",
+        "data::Client::trades_with"
       ],
       "tests": [
         "tests/client.rs"
       ],
       "guard": null,
-      "notes": null
+      "notes": "TradeParams supports wallet, market/event, side, taker, amount, time, limit, and offset filters."
     },
     {
       "id": "data.value.read",

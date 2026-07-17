@@ -17,7 +17,7 @@ Taxonomy parity does not imply implementation parity.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Gamma | Search/markets/events | `gamma-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/gamma.rs`](../src/gamma.rs) | [`tests/client.rs`](../tests/client.rs) |
 | CLOB | Books/prices/market metadata | `clob.polymarket.com` | HTTPS | none | `public` | implemented | [`src/clob.rs`](../src/clob.rs) | [`tests/client.rs`](../tests/client.rs) |
-| Data API | Positions/trades/activity/analytics | `data-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/data.rs`](../src/data.rs) | [`tests/client.rs`](../tests/client.rs) |
+| Data API | Positions, paginated closed positions/trades/activity, holders, and filtered leaderboards | `data-api.polymarket.com` | HTTPS | none | `public` | implemented | [`src/data.rs`](../src/data.rs) | [`tests/client.rs`](../tests/client.rs) |
 | Market WSS | Book/price/trade/tick/lifecycle events | `/ws/market` | WSS | none | `public` | implemented | [`src/stream_client.rs`](../src/stream_client.rs) | [`src/stream_client.rs`](../src/stream_client.rs) |
 | Resolution | Arbitrary market result | Gamma + CLOB | HTTPS | none | `public` | implemented | [`src/market_results.rs`](../src/market_results.rs) | [`tests/market_results.rs`](../tests/market_results.rs) |
 | Crypto resolver | Up/Down 5m windows | Gamma | HTTPS | none | `public` | implemented | [`src/market_resolver.rs`](../src/market_resolver.rs) | [`src/market_resolver.rs`](../src/market_resolver.rs) |
