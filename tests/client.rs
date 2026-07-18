@@ -7,6 +7,8 @@ use std::{
     thread,
 };
 
+use chrono::{TimeZone, Utc};
+
 use polyrover::{
     data::{ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
     gamma::{MarketKeysetParams, MarketParams, SearchParams},
@@ -196,6 +198,39 @@ async fn client_reads_clob_prices_through_one_public_interface() {
     assert!(request.starts_with("GET /price?"));
     assert!(request.contains("token_id=token-1"));
     assert!(request.contains("side=buy"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_reads_crypto_reference_price_through_one_public_interface() {
+    let (crypto_price_base_url, received, server) = serve_json(
+        r#"{"openPrice":64000.5,"closePrice":64010.25,"timestamp":1778745300000,"completed":false,"incomplete":false,"cached":true}"#,
+    );
+    let client = Client::new(ClientConfig {
+        crypto_price_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let price = client
+        .crypto_price(
+            "btc",
+            Utc.with_ymd_and_hms(2026, 5, 14, 7, 55, 0).unwrap(),
+            "fiveminute",
+            Utc.with_ymd_and_hms(2026, 5, 14, 8, 0, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(price.open_price, 64000.5);
+    assert_eq!(price.close_price, Some(64010.25));
+    assert!(price.cached);
+    let request = received.recv().unwrap();
+    assert!(request.starts_with("GET /api/crypto/crypto-price?"));
+    assert!(request.contains("symbol=BTC"));
+    assert!(request.contains("eventStartTime=2026-05-14T07%3A55%3A00Z"));
+    assert!(request.contains("variant=fiveminute"));
+    assert!(request.contains("endDate=2026-05-14T08%3A00%3A00Z"));
     server.join().unwrap();
 }
 

@@ -516,7 +516,8 @@ mod tests {
         let client = crate::Client::new(crate::ClientConfig {
             gamma_base_url: base.clone(),
             clob_base_url: base.clone(),
-            data_base_url: base,
+            data_base_url: base.clone(),
+            crypto_price_base_url: base,
         })
         .unwrap();
         (client, server)
@@ -719,7 +720,8 @@ mod tests {
         let client = crate::Client::new(crate::ClientConfig {
             gamma_base_url: base.clone(),
             clob_base_url: base.clone(),
-            data_base_url: base,
+            data_base_url: base.clone(),
+            crypto_price_base_url: base,
         })?;
         let start = Utc.timestamp_opt(1_700_000_100, 0).unwrap();
         let rows = discover_window_markets(&client, &["BTC".into()], start, start).await?;

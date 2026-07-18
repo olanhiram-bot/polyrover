@@ -25,6 +25,8 @@ pub mod clob;
 pub mod clob_orders;
 pub mod config;
 #[cfg(feature = "public")]
+pub mod crypto_price;
+#[cfg(feature = "public")]
 pub mod data;
 pub mod data_types;
 pub mod error;

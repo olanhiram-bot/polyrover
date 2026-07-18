@@ -2,7 +2,7 @@
 //! plus aggregate health reporting.
 
 use crate::{
-    clob,
+    clob, crypto_price,
     data::{self, ActivityParams, ClosedPositionParams, LeaderboardParams, TradeParams},
     data_types::{Activity, ClosedPosition, LeaderboardRow, Position, Trade},
     gamma::{self, MarketKeysetParams, MarketParams, SearchParams},
@@ -25,6 +25,7 @@ pub struct ClientConfig {
     pub gamma_base_url: String,
     pub clob_base_url: String,
     pub data_base_url: String,
+    pub crypto_price_base_url: String,
 }
 
 impl Default for ClientConfig {
@@ -33,6 +34,7 @@ impl Default for ClientConfig {
             gamma_base_url: gamma::DEFAULT_BASE_URL.into(),
             clob_base_url: clob::DEFAULT_BASE_URL.into(),
             data_base_url: data::DEFAULT_BASE_URL.into(),
+            crypto_price_base_url: crypto_price::DEFAULT_BASE_URL.into(),
         }
     }
 }
@@ -43,6 +45,7 @@ pub struct Client {
     gamma: gamma::Client,
     clob: clob::Client,
     data: data::Client,
+    crypto_price: crypto_price::Client,
 }
 
 impl Client {
@@ -52,6 +55,7 @@ impl Client {
             gamma: gamma::Client::new(config.gamma_base_url)?,
             clob: clob::Client::new(config.clob_base_url)?,
             data: data::Client::new(config.data_base_url)?,
+            crypto_price: crypto_price::Client::new(config.crypto_price_base_url)?,
         })
     }
 
@@ -81,6 +85,18 @@ impl Client {
 
     pub async fn price(&self, token_id: &str, side: &str) -> Result<String> {
         self.clob.price(token_id, side).await
+    }
+
+    pub async fn crypto_price(
+        &self,
+        symbol: &str,
+        event_start: chrono::DateTime<chrono::Utc>,
+        variant: &str,
+        end_date: chrono::DateTime<chrono::Utc>,
+    ) -> Result<crypto_price::CryptoPrice> {
+        self.crypto_price
+            .get(symbol, event_start, variant, end_date)
+            .await
     }
 
     pub async fn current_positions(&self, user: &str, limit: u32) -> Result<Vec<Position>> {
