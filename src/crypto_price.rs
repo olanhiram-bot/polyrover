@@ -10,7 +10,7 @@ pub const DEFAULT_BASE_URL: &str = "https://polymarket.com";
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct CryptoPrice {
     #[serde(rename = "openPrice")]
-    pub open_price: f64,
+    pub open_price: Option<f64>,
     #[serde(default, rename = "closePrice")]
     pub close_price: Option<f64>,
     #[serde(default)]
@@ -61,9 +61,12 @@ impl Client {
             escape(&end_date.to_rfc3339_opts(SecondsFormat::Secs, true)),
         );
         let price: CryptoPrice = self.transport.get_json(&path).await?;
-        if !price.open_price.is_finite() || price.open_price <= 0.0 {
+        if price
+            .open_price
+            .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        {
             return Err(Error::Invalid(format!(
-                "crypto price openPrice is invalid: {}",
+                "crypto price openPrice is invalid: {:?}",
                 price.open_price
             )));
         }

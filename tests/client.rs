@@ -222,7 +222,7 @@ async fn client_reads_crypto_reference_price_through_one_public_interface() {
         .await
         .unwrap();
 
-    assert_eq!(price.open_price, 64000.5);
+    assert_eq!(price.open_price, Some(64000.5));
     assert_eq!(price.close_price, Some(64010.25));
     assert!(price.cached);
     let request = received.recv().unwrap();
@@ -231,6 +231,33 @@ async fn client_reads_crypto_reference_price_through_one_public_interface() {
     assert!(request.contains("eventStartTime=2026-05-14T07%3A55%3A00Z"));
     assert!(request.contains("variant=fiveminute"));
     assert!(request.contains("endDate=2026-05-14T08%3A00%3A00Z"));
+    server.join().unwrap();
+}
+
+#[tokio::test]
+async fn client_accepts_missing_future_crypto_reference_price() {
+    let (crypto_price_base_url, received, server) = serve_json(
+        r#"{"openPrice":null,"closePrice":null,"timestamp":0,"completed":false,"incomplete":true,"cached":false}"#,
+    );
+    let client = Client::new(ClientConfig {
+        crypto_price_base_url,
+        ..ClientConfig::default()
+    })
+    .unwrap();
+
+    let price = client
+        .crypto_price(
+            "BTC",
+            Utc.with_ymd_and_hms(2026, 5, 14, 8, 0, 0).unwrap(),
+            "fiveminute",
+            Utc.with_ymd_and_hms(2026, 5, 14, 8, 5, 0).unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(price.open_price, None);
+    assert!(price.incomplete);
+    received.recv().unwrap();
     server.join().unwrap();
 }
 
