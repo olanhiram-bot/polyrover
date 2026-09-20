@@ -133,6 +133,52 @@ polyrover clob simulate \
   --json
 ```
 
+### Optional TypeSafe market research
+
+Build this checkout with `cargo build --features typesafe`. The `ai review-market`
+command uses [TypeSafe System One](https://docs.typesafe.ai/introduction) to classify
+a market and assess its resolution rules. It returns typed answers, confidence,
+token usage, and a deterministic `research_ready` or `manual_review` route.
+
+Preview the exact request locally, without credentials or API usage:
+
+```bash
+cargo run --features typesafe -- ai review-market \
+  --market-file examples/typesafe-market.json --dry-run --json
+```
+
+For an actual evaluation, set `TYPESAFE_API_KEY` in your environment. You can
+copy `.env.example` to `.env`, fill in the key, then load it explicitly:
+
+```bash
+set -a
+. ./.env
+set +a
+cargo run --features typesafe -- ai review-market --slug MARKET_SLUG --json
+```
+
+An evaluation sends selected public market fields to TypeSafe and consumes its
+API quota. `--dry-run --slug` still fetches Gamma data; `--dry-run --market-file`
+is fully local. This feature is opt-in, excluded from both `default` and `full`.
+Research readiness describes rule clarity, not investment quality or the
+probability of a market outcome. See [integration design and Rust examples](docs/typesafe.md).
+
+Research current news using the market question or a Google News search URL:
+
+```bash
+cargo run --features typesafe -- ai research-market \
+  --question 'Will Paris Saint-Germain win the 2026-27 UEFA Champions League Championship?' \
+  --output psg-news.json --json
+```
+
+`--news-url 'https://news.google.com/search?q=...&hl=en-US&gl=US&ceid=US:en'`
+preserves the supplied search and locale. Every item in the returned RSS snapshot
+is attempted. Accessible publisher text is evaluated in full across bounded
+chunks; inaccessible pages, exact duplicates, stale articles, and evaluation
+failures remain visible. `--collect-only` fetches/extracts without using TypeSafe.
+Reports contain source links, coverage, and typed judgments, not republished
+article bodies. See [news research](docs/typesafe.md#news-research).
+
 ## CLI reference
 
 | Area                | Commands                                                                                                                                                                            | Purpose                                                     |
@@ -337,6 +383,7 @@ private-key signing, relayer, or bridge-transfer client.
 - **`execution`** — order and cancellation data types only; no submission transport.
 - **`bridge`** — bridge data types and local validation only; no transfer transport.
 - **`full`** — compiles every surface above; it does not add runtime authority.
+- **`typesafe`** — optional semantic market research through an external TypeSafe API; enabled separately from `full`.
 
 </details>
 

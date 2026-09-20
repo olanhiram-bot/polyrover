@@ -1,0 +1,9 @@
+{
+  "id": "example-1",
+  "slug": "synthetic-bitcoin-threshold",
+  "question": "Will Bitcoin close above $100,000 on December 31, 2026?",
+  "description": "Resolves Yes if the Coinbase BTC-USD daily candle closing at 2027-01-01 00:00 UTC has a close strictly greater than 100000 USD. Otherwise resolves No. If that candle is unavailable, resolves No.",
+  "resolutionSource": "https://www.coinbase.com/",
+  "endDate": "2027-01-01T00:00:00Z",
+  "outcomes": ["Yes", "No"]
+}

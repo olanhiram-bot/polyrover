@@ -4,6 +4,20 @@ use std::{process::Command, thread};
 
 use tokio_tungstenite::tungstenite::{self, Message};
 
+#[cfg(not(feature = "typesafe"))]
+#[test]
+fn ai_research_requires_explicit_feature_opt_in() {
+    let output = Command::new(env!("CARGO_BIN_EXE_polyrover"))
+        .args(["ai", "review-market", "--slug", "example"])
+        .env_remove("TYPESAFE_API_KEY")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let body: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    assert_eq!(body["ok"], false);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("--features typesafe"));
+}
+
 #[test]
 fn stream_watch_prints_events_and_stats_from_public_websocket() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();

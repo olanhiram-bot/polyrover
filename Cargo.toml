@@ -14,6 +14,7 @@ wallet = ["dep:hex", "dep:sha3"]
 execution = ["authenticated", "wallet"]
 bridge = []
 full = ["execution", "bridge"]
+typesafe = ["public", "dep:roxmltree", "dep:scraper", "dep:sha2"]
 
 [dependencies]
 base64 = { version = "0.22", optional = true }
@@ -23,6 +24,8 @@ hmac = { version = "0.12", optional = true }
 futures-util = { version = "0.3", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
 rust_decimal = { version = "1", default-features = false, features = ["std"] }
+roxmltree = { version = "0.21", optional = true }
+scraper = { version = "0.27", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision"] }
 sha2 = { version = "0.10", optional = true }

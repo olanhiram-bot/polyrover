@@ -64,6 +64,12 @@ pub mod market_resolver;
 #[cfg(feature = "public")]
 #[path = "research/market_results.rs"]
 pub mod market_results;
+#[cfg(feature = "typesafe")]
+#[path = "research/news.rs"]
+pub mod news;
+#[cfg(feature = "typesafe")]
+#[path = "research/news_research.rs"]
+pub mod news_research;
 #[path = "cli/output.rs"]
 pub mod output;
 #[path = "research/paper.rs"]
@@ -84,6 +90,9 @@ pub mod stream_client;
 pub mod transport;
 #[path = "models/types.rs"]
 pub mod types;
+#[cfg(feature = "typesafe")]
+#[path = "research/typesafe.rs"]
+pub mod typesafe;
 #[cfg(feature = "authenticated")]
 #[path = "streaming/user_stream.rs"]
 pub mod user_stream;

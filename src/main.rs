@@ -8,6 +8,13 @@ use polyrover::{
 };
 use serde_json::json;
 
+#[cfg(feature = "typesafe")]
+#[path = "cli/news.rs"]
+mod news_cli;
+#[cfg(feature = "typesafe")]
+#[path = "cli/typesafe.rs"]
+mod typesafe_cli;
+
 #[tokio::main]
 async fn main() {
     if let Err(err) = run().await {
@@ -35,6 +42,32 @@ async fn run() -> Result<()> {
         }
         [cmd, rest @ ..] if cmd == "help" => print_command_help(rest),
         [cmd] if cmd == "ping" => ping(&client).await,
+        [group, cmd, rest @ ..] if group == "ai" && cmd == "research-market" => {
+            #[cfg(feature = "typesafe")]
+            {
+                news_cli::research(&client, rest).await
+            }
+            #[cfg(not(feature = "typesafe"))]
+            {
+                let _ = rest;
+                Err(Error::Invalid(
+                    "ai research-market requires --features typesafe".into(),
+                ))
+            }
+        }
+        [group, cmd, rest @ ..] if group == "ai" && cmd == "review-market" => {
+            #[cfg(feature = "typesafe")]
+            {
+                typesafe_cli::review(&client, rest).await
+            }
+            #[cfg(not(feature = "typesafe"))]
+            {
+                let _ = rest;
+                Err(Error::Invalid(
+                    "ai review-market requires a build with --features typesafe".into(),
+                ))
+            }
+        }
         [group, cmd, rest @ ..] if group == "gamma" && cmd == "search" => {
             gamma_search(&client, rest).await
         }
@@ -620,12 +653,20 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 }
 
 fn print_help() {
+    #[cfg(feature = "typesafe")]
+    let ai_help = "\nOptional AI research:\n  ai review-market    Classify a market and review resolution rules with TypeSafe\n  ai research-market Read Google News publisher articles and assess their evidence\n";
     println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping                       Check API health\n    gamma search               Search Gamma markets, events, and profiles\n    gamma markets              List Gamma markets\n    gamma market-page          Fetch one keyset-paginated market page\n    gamma events               List Gamma events\n    gamma event-page           Fetch one keyset-paginated event page\n    clob book                  Fetch an order book\n    clob price                 Fetch a side price\n    clob fee-rate              Fetch a token's base fee in bps\n    clob fees                  Show order types and the documented fee schedule\n    clob simulate              Estimate a fill, optionally including taker fees\n    clob price-history         Fetch one token's historical price series\n    clob batch-price-history   Fetch up to 20 historical price series\n    analytics positions        Fetch wallet positions\n    analytics trades           Fetch trades\n    analytics closed-positions Fetch wallet closed positions\n    analytics activity         Fetch wallet activity\n    analytics leaderboard      Fetch the trader leaderboard\n    analytics builder-leaderboard Fetch the aggregated builder leaderboard\n    analytics builder-volume   Fetch daily builder volume history\n\n  Streaming:\n    stream watch               Watch public market events\n\n  Local simulation:\n    sim reset                  Create a fresh paper state\n    sim buy                    Apply a local paper buy\n    sim sell                   Apply a local paper sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.\nOfficial API guide: https://docs.polymarket.com/getting-started/api");
+    #[cfg(feature = "typesafe")]
+    print!("{ai_help}");
 }
 
 fn print_command_help(command: &[String]) -> Result<()> {
     if let [group] = command {
         let details = match group.as_str() {
+            "ai" => Some((
+                "Optional TypeSafe semantic research (requires --features typesafe and TYPESAFE_API_KEY, except --dry-run).",
+                "  review-market    Classify a market and assess resolution rules\n  research-market  Read all returned Google News articles and assess evidence",
+            )),
             "gamma" => Some((
                 "Query public Gamma discovery APIs. Historical commands make one bounded upstream request. Callers own pagination.",
                 "  search         Search markets, events, and profiles\n  markets        List offset-paginated markets\n  market-page    Fetch one keyset-paginated market page\n  events         List offset-paginated events\n  event-page     Fetch one keyset-paginated event page",
@@ -655,6 +696,18 @@ fn print_command_help(command: &[String]) -> Result<()> {
     }
 
     let (description, usage, options, example) = match command {
+        [group, command] if group == "ai" && command == "research-market" => (
+            "Read every Google News result in the provider snapshot. Extract publisher text, evaluate every extracted chunk, and report unread sources. Requires --features typesafe. Sends article text to TypeSafe unless --collect-only is set.",
+            "ai research-market (--slug <slug> | --market-file <path> | --news-url <url> | --question <text>) [options]",
+            "  --news-url <url>       Google News /search URL, preserving q/hl/gl/ceid\n  --question <text>      Search this exact question using en-US/US/US:en\n  --slug <slug>          Search a Gamma market question\n  --market-file <path>   Search a local market question\n  --collect-only        Fetch/extract all results without TypeSafe calls\n  --model <name>        Default: jev-latest\n  --min-confidence <n> Default: 0.8\n  --max-age-days <n>    Default: 30; older articles are read but excluded from signal counts\n  --output <path>       Save JSON report; refuses to overwrite\n  TYPESAFE_API_KEY       Required for evaluation\n",
+            "polyrover ai research-market --question 'Will Paris Saint-Germain win the 2026-27 UEFA Champions League Championship?' --output psg-news.json --json",
+        ),
+        [group, command] if group == "ai" && command == "review-market" => (
+            "Review market resolution rules with TypeSafe. Sends selected market fields to TypeSafe; requires --features typesafe. Research routing only, not an outcome forecast.",
+            "ai review-market (--slug <slug> | --market-file <path>) [--model <model>] [--min-confidence <0..1>] [--dry-run] [--json]",
+            "  --slug <slug>          Fetch one public Gamma market\n  --market-file <path>   Read one raw Gamma market JSON object\n  --model <model>        TypeSafe model (default: jev-latest)\n  --min-confidence <n>   Choice/Score confidence floor (default: 0.8)\n  --dry-run             Print request without calling TypeSafe; no API key needed\n  TYPESAFE_API_KEY       API key environment variable (required for evaluations)\n",
+            "polyrover ai review-market --market-file market.json --dry-run --json",
+        ),
         [command] if command == "ping" => (
             "Check Gamma, CLOB, and Data API health.",
             "ping [--json]",
