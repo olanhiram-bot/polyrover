@@ -960,7 +960,10 @@ mod tests {
         );
     }
 
-    #[tokio::test(start_paused = true)]
+    // Real TCP readiness does not advance with Tokio's virtual clock. Auto-
+    // advancing paused time can expire the replacement's timeout before its
+    // already-sent frame reaches the reactor, causing a spurious second reconnect.
+    #[tokio::test]
     async fn silent_connection_past_pong_timeout_triggers_reconnect() {
         use futures_util::{SinkExt, StreamExt};
 
@@ -1004,7 +1007,13 @@ mod tests {
         .unwrap();
         client.subscribe_assets(&["token-1".into()]).await.unwrap();
 
-        let read = client.read_raw_with_status(1).await.unwrap();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            client.read_raw_with_status(1),
+        )
+        .await
+        .expect("silent socket should reconnect within the test deadline")
+        .unwrap();
         assert!(read.reconnected);
         assert_eq!(read.messages[0].event_type, "new_market");
         assert_eq!(client.stats().reconnects, 1);

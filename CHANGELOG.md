@@ -4,6 +4,8 @@
 
 ### Added
 
+- `ai decide-market`: end-to-end news research, experimental evidence-grounded forecast bands, fresh ask-depth/fee comparison and deterministic `buy_yes` / `buy_no` / `wait` recommendations, with audit reports and no execution.
+- AI CLI commands can read only `TYPESAFE_API_KEY` from the local ignored `.env`, without sourcing shell code; the process environment takes precedence.
 - `ai research-market`: Google News query/locale preservation, all-item publisher retrieval, article-text extraction, lossless TypeSafe chunk evaluations, and source/coverage reports with explicit unread and duplicate articles.
 - Opt-in `typesafe` feature with typed System One questions/answers, validated responses, and semantic market-rule reviews through Rust and `ai review-market`; includes offline request previews.
 - Linked CLI help and current project documentation to Polymarket's official API and SDK guidance.
@@ -12,6 +14,7 @@
 
 ### Safety
 
+- Stabilized the silent-WebSocket reconnect test by using real time with real TCP and a bounded test deadline; no client runtime behavior changed.
 - Authenticated reads add no credential loading/storage, private-key signing, CLI secret path, API-key creation, order mutation, traversal, or persistence.
 
 ## 0.2.0 - 2026-07-28

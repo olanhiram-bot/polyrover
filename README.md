@@ -147,13 +147,11 @@ cargo run --features typesafe -- ai review-market \
   --market-file examples/typesafe-market.json --dry-run --json
 ```
 
-For an actual evaluation, set `TYPESAFE_API_KEY` in your environment. You can
-copy `.env.example` to `.env`, fill in the key, then load it explicitly:
+For an actual evaluation, set `TYPESAFE_API_KEY` in your environment or in the
+local `.env` (environment takes precedence; the CLI reads only this key and does
+not execute the file). You can copy `.env.example` to `.env` and fill in the key:
 
 ```bash
-set -a
-. ./.env
-set +a
 cargo run --features typesafe -- ai review-market --slug MARKET_SLUG --json
 ```
 
@@ -178,6 +176,22 @@ chunks; inaccessible pages, exact duplicates, stale articles, and evaluation
 failures remain visible. `--collect-only` fetches/extracts without using TypeSafe.
 Reports contain source links, coverage, and typed judgments, not republished
 article bodies. See [news research](docs/typesafe.md#news-research).
+
+For an end-to-end experimental decision:
+
+```bash
+cargo run --features typesafe -- ai decide-market \
+  --slug MARKET_SLUG --shares 10 --output decision.json --json
+```
+
+The command investigates news, returns a sourced forecast band where numerical
+evidence supports one, refreshes actual ask depth and market-specific fees, and
+outputs `buy_yes`, `buy_no`, or `wait`. No order is submitted. `--question` and
+`--news-url` also work without a market, but only produce a forecast, not a priced
+buy recommendation. These forecasts are **experimental and uncalibrated**;
+classifier confidence is not the chance of winning. Missing evidence, unclear
+rules, unknown fees or insufficient edge cause an explained `wait`, not a forced
+bet. See [decision policy](docs/typesafe.md#experimental-decisions).
 
 ## CLI reference
 

@@ -1,5 +1,35 @@
 use polyrover::{types::Market, typesafe, Client, Error, Result};
 
+/// Environment takes precedence. Read ONLY this key from local .env; never execute shell code.
+pub fn evaluator(config: typesafe::Config) -> Result<typesafe::Client> {
+    if std::env::var_os("TYPESAFE_API_KEY").is_some() {
+        return typesafe::Client::from_env(config);
+    }
+    let contents = std::fs::read_to_string(".env")
+        .map_err(|_| Error::Invalid("set TYPESAFE_API_KEY or add it to the local .env".into()))?;
+    let mut key = None;
+    for line in contents.lines() {
+        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != "TYPESAFE_API_KEY" {
+            continue;
+        }
+        if key.is_some() {
+            return Err(Error::Invalid("duplicate TYPESAFE_API_KEY in .env".into()));
+        }
+        let value = value.trim();
+        let value = value
+            .strip_prefix('"')
+            .and_then(|v| v.strip_suffix('"'))
+            .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+            .unwrap_or(value);
+        key = Some(value.to_owned());
+    }
+    typesafe::Client::new(key.as_deref().unwrap_or(""), config)
+}
+
 pub async fn review(client: &Client, args: &[String]) -> Result<()> {
     let options = Options::parse(args)?;
     let config = typesafe::Config {
@@ -10,7 +40,7 @@ pub async fn review(client: &Client, args: &[String]) -> Result<()> {
     let evaluator = if options.dry_run {
         None
     } else {
-        Some(typesafe::Client::from_env(config.clone())?)
+        Some(evaluator(config.clone())?)
     };
     let market: Market = if let Some(path) = options.market_file {
         let bytes = std::fs::read(path)

@@ -72,7 +72,7 @@ pub async fn research(client: &Client, args: &[String]) -> Result<()> {
     let evaluator = if collect_only {
         None
     } else {
-        Some(typesafe::Client::from_env(typesafe::Config {
+        Some(super::typesafe_cli::evaluator(typesafe::Config {
             model: model.into(),
             ..Default::default()
         })?)

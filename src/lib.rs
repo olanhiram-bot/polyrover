@@ -44,6 +44,9 @@ pub mod crypto_price;
 pub mod data;
 #[path = "models/data_types.rs"]
 pub mod data_types;
+#[cfg(feature = "typesafe")]
+#[path = "research/decision.rs"]
+pub mod decision;
 pub mod error;
 #[cfg(feature = "public")]
 #[path = "api/gamma.rs"]

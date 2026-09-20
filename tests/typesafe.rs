@@ -323,6 +323,7 @@ fn cli_reports_bad_arguments_and_missing_credentials_without_network() {
         vec!["--slug", "example"],
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_polyrover"))
+            .current_dir(std::env::temp_dir())
             .env_remove("TYPESAFE_API_KEY")
             .args(["ai", "review-market"])
             .args(&args)

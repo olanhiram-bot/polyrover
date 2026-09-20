@@ -9,6 +9,9 @@ use polyrover::{
 use serde_json::json;
 
 #[cfg(feature = "typesafe")]
+#[path = "cli/decision.rs"]
+mod decision_cli;
+#[cfg(feature = "typesafe")]
 #[path = "cli/news.rs"]
 mod news_cli;
 #[cfg(feature = "typesafe")]
@@ -42,6 +45,19 @@ async fn run() -> Result<()> {
         }
         [cmd, rest @ ..] if cmd == "help" => print_command_help(rest),
         [cmd] if cmd == "ping" => ping(&client).await,
+        [group, cmd, rest @ ..] if group == "ai" && cmd == "decide-market" => {
+            #[cfg(feature = "typesafe")]
+            {
+                decision_cli::run(&client, rest).await
+            }
+            #[cfg(not(feature = "typesafe"))]
+            {
+                let _ = rest;
+                Err(Error::Invalid(
+                    "ai decide-market requires --features typesafe".into(),
+                ))
+            }
+        }
         [group, cmd, rest @ ..] if group == "ai" && cmd == "research-market" => {
             #[cfg(feature = "typesafe")]
             {
@@ -654,7 +670,7 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 
 fn print_help() {
     #[cfg(feature = "typesafe")]
-    let ai_help = "\nOptional AI research:\n  ai review-market    Classify a market and review resolution rules with TypeSafe\n  ai research-market Read Google News publisher articles and assess their evidence\n";
+    let ai_help = "\nOptional AI research:\n  ai review-market    Classify a market and review resolution rules with TypeSafe\n  ai research-market Read Google News publisher articles and assess their evidence\n  ai decide-market   Experimental BUY YES / BUY NO / WAIT decision with sources and prices\n";
     println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping                       Check API health\n    gamma search               Search Gamma markets, events, and profiles\n    gamma markets              List Gamma markets\n    gamma market-page          Fetch one keyset-paginated market page\n    gamma events               List Gamma events\n    gamma event-page           Fetch one keyset-paginated event page\n    clob book                  Fetch an order book\n    clob price                 Fetch a side price\n    clob fee-rate              Fetch a token's base fee in bps\n    clob fees                  Show order types and the documented fee schedule\n    clob simulate              Estimate a fill, optionally including taker fees\n    clob price-history         Fetch one token's historical price series\n    clob batch-price-history   Fetch up to 20 historical price series\n    analytics positions        Fetch wallet positions\n    analytics trades           Fetch trades\n    analytics closed-positions Fetch wallet closed positions\n    analytics activity         Fetch wallet activity\n    analytics leaderboard      Fetch the trader leaderboard\n    analytics builder-leaderboard Fetch the aggregated builder leaderboard\n    analytics builder-volume   Fetch daily builder volume history\n\n  Streaming:\n    stream watch               Watch public market events\n\n  Local simulation:\n    sim reset                  Create a fresh paper state\n    sim buy                    Apply a local paper buy\n    sim sell                   Apply a local paper sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.\nOfficial API guide: https://docs.polymarket.com/getting-started/api");
     #[cfg(feature = "typesafe")]
     print!("{ai_help}");
@@ -665,7 +681,7 @@ fn print_command_help(command: &[String]) -> Result<()> {
         let details = match group.as_str() {
             "ai" => Some((
                 "Optional TypeSafe semantic research (requires --features typesafe and TYPESAFE_API_KEY, except --dry-run).",
-                "  review-market    Classify a market and assess resolution rules\n  research-market  Read all returned Google News articles and assess evidence",
+                "  review-market    Classify a market and assess resolution rules\n  research-market  Read all returned Google News articles and assess evidence\n  decide-market    Experimental forecast and priced recommendation; no execution",
             )),
             "gamma" => Some((
                 "Query public Gamma discovery APIs. Historical commands make one bounded upstream request. Callers own pagination.",
@@ -696,6 +712,12 @@ fn print_command_help(command: &[String]) -> Result<()> {
     }
 
     let (description, usage, options, example) = match command {
+        [group, command] if group == "ai" && command == "decide-market" => (
+            "Read Google News, build an experimental forecast, and recommend BUY YES / BUY NO / WAIT. Advisory only: never submits orders. Requires --features typesafe. API key is read from the environment or local .env. All extracted text is assessed; the bounded synthesis reports excluded sources.",
+            "ai decide-market (--slug <slug> | --question <text> | --news-url <url>) [options]",
+            "  --slug <slug>         Binary YES/NO market; required for priced buy recommendations\n  --question <text>     Forecast only; no invented market prices\n  --news-url <url>      Exact Google News search; with --slug its query must match\n  --shares <n>          Depth to quote (default: 10)\n  --min-edge <n>        Required edge per share (default: 0.05)\n  --max-age-days <n>    Freshness window, 1..365 (default: 30)\n  --model <name>        Default: jev-latest\n  --output <path>       Save full audit report; refuses overwrite\n",
+            "polyrover ai decide-market --slug <market-slug> --shares 10 --output decision.json --json",
+        ),
         [group, command] if group == "ai" && command == "research-market" => (
             "Read every Google News result in the provider snapshot. Extract publisher text, evaluate every extracted chunk, and report unread sources. Requires --features typesafe. Sends article text to TypeSafe unless --collect-only is set.",
             "ai research-market (--slug <slug> | --market-file <path> | --news-url <url> | --question <text>) [options]",

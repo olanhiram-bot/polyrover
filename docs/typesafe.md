@@ -53,8 +53,11 @@ source market snapshot alongside the result when reproducibility matters;
 
 ## CLI
 
-The CLI reads `TYPESAFE_API_KEY` from the process environment. For local use,
-copy `.env.example` to `.env`, set the key there, and load it before evaluating:
+The CLI reads `TYPESAFE_API_KEY` from the process environment, falling back to
+that single key in the current directory's `.env`. It never executes the file,
+interpolates variables or loads other credentials. Simple unquoted, single-quoted
+and double-quoted values are supported; duplicate keys are rejected. The Rust
+SDK's `Client::from_env` remains environment-only. Explicit shell loading is optional:
 
 ```bash
 set -a
@@ -62,8 +65,9 @@ set -a
 set +a
 ```
 
-`.env` is ignored by Git. The CLI does not automatically load files from the
-working directory. Never add real credentials to `.env.example`.
+`.env` is ignored by Git. Only its `TYPESAFE_API_KEY` is read automatically by AI
+CLI commands; no other configuration files are loaded. Never add real credentials
+to `.env.example`.
 
 ```bash
 # Local inspection; no key and no external calls.
@@ -194,6 +198,84 @@ original articles when a page was blocked or only partial content was served.
 The command also prints the normal versioned JSON envelope. If the process fails
 before finishing, a reserved output file may be empty; an empty file is not a
 completed research report. Generated research reports should stay local.
+
+## Experimental decisions
+
+```bash
+cargo build --features typesafe
+./target/debug/polyrover ai decide-market \
+  --slug will-paris-saint-germain-win-the-2026-27-uefa-champions-league-championship-20260701202025550 \
+  --shares 10 --output psg-decision.json --json
+```
+
+`TYPESAFE_API_KEY` can stay in the ignored local `.env`. This command consumes
+TypeSafe quota and sends extracted publisher text to TypeSafe. It never requests
+wallet credentials or submits orders. Progress goes to stderr; stdout contains
+one versioned JSON report. `--question` or `--news-url` without a slug supports
+forecast-only research; the trading decision remains `wait` because prices and
+resolution rules are not known. An optional `--news-url` with a slug must have
+exactly the market's question as its query.
+
+The complete pipeline is:
+
+1. Attempt every item from Google News and assess every extracted text chunk.
+2. Select current, directly relevant, fully assessed articles for synthesis,
+   newest first, retaining each whole article. The synthesis state is limited
+   to 24,000 UTF-8 bytes. Every exclusion has an ID and reason. Missing text or
+   relevant articles exceeding that budget block buy recommendations; they do
+   not disappear from the research report.
+3. Ask TypeSafe to select a **subjective YES probability band** in ten-percentage-
+   point increments, or `insufficient`, using numerical forecasts/base rates
+   actually present in the sources. A second question checks the quantitative
+   basis. The band endpoints come from the selected rubric, **not** from the
+   answer's probability distribution or confidence. This experimental use is
+   not a calibrated forecasting model, and these are not statistical confidence
+   intervals. Qualitative popularity or favorite rankings alone are insufficient.
+4. Review resolution rules; refresh Gamma metadata and both token books after
+   all model calls. Changes to market identity/rules/deadline/tokens block buying.
+5. Walk sorted asks for the requested shares, include actual per-market fees
+   and a one-cent-per-share slippage reserve, then apply the deterministic policy.
+
+Default safeguards require at least 60% of distinct discovered articles fully
+evaluated, two relevant publisher hosts in the synthesis (not proof of source
+independence), quantitative support, classifier confidence at least 0.65, and
+research-ready resolution rules. These are conservative engineering heuristics,
+not validated accuracy guarantees. The market must still be active, accepting
+orders and before its known deadline. Books must match market/token and have
+venue timestamps no more than 120 seconds old (5 seconds future tolerance).
+Fees must be explicitly disabled or have a valid Gamma `feeSchedule` with
+exponent 1. Unknown fees or unsupported formulas do not default to zero.
+See [Polymarket market fee parameters](https://docs.polymarket.com/market-data/market-details)
+and [fee formula](https://docs.polymarket.com/trading/fees).
+
+For YES band `[lo, hi]`, the policy uses:
+
+```text
+YES edge = max(0, lo - 0.10) - YES cost per share
+NO edge  = max(0, 1 - hi - 0.10) - NO cost per share
+cost     = volume-weighted ask + market fee + 0.01 slippage reserve
+```
+
+The 0.10 is an explicit model-risk haircut, not a calibrated error estimate.
+A buy requires edge strictly greater than `--min-edge` (default 0.05) and all
+quality gates passing. If both qualify, choose the larger edge. Otherwise output
+`wait` with reasons. A NO forecast therefore does not automatically recommend
+buying NO. A failed forecast yields `wait`, never a fabricated replacement.
+If one token quote fails, the other can still qualify; all errors are retained.
+Calculations use floating-point research estimates, not executable order amounts.
+Fee estimates round upward to five decimal places. No exit strategy, position
+sizing, portfolio management, rebates or financing costs are modeled.
+
+The JSON report includes the decision and Spanish summary, forecast, policy,
+book timestamps, quotes, fee/rule market snapshot, selected/excluded source IDs,
+rule assessment and complete news coverage. Article bodies and credentials are
+not written to it. A probability band can be reported even when quality gates
+block buying; check the decision reasons as well as the forecast.
+
+Before treating this as a production strategy, collect timestamped forecasts
+before outcomes resolve, evaluate calibration and performance on held-out
+resolved markets, and validate the policy's costs and thresholds. No such
+historical validation is claimed by this implementation.
 
 ## Possible extensions
 
