@@ -15,9 +15,12 @@ execution = ["authenticated", "wallet"]
 bridge = []
 full = ["execution", "bridge"]
 typesafe = ["public", "dep:roxmltree", "dep:scraper", "dep:sha2"]
-server = ["typesafe", "dep:axum", "dep:tower-http"]
+server = ["typesafe", "dep:axum", "dep:tower-http", "dep:tokio-postgres", "dep:postgres-native-tls", "dep:native-tls"]
 
 [dependencies]
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"], optional = true }
+postgres-native-tls = { version = "0.5", optional = true }
+native-tls = { version = "0.2", optional = true }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"], optional = true }
 tower-http = { version = "0.6", features = ["cors", "set-header"], optional = true }
 base64 = { version = "0.22", optional = true }

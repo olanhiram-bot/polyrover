@@ -50,6 +50,9 @@ pub mod decision;
 #[cfg(feature = "server")]
 #[path = "api/decision_server.rs"]
 pub mod decision_server;
+#[cfg(feature = "server")]
+#[path = "storage/decision_store.rs"]
+mod decision_store;
 pub mod error;
 #[cfg(feature = "public")]
 #[path = "api/gamma.rs"]

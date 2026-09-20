@@ -3,6 +3,30 @@
 Build with `cargo build --features server`. Polyrover itself is the backend for
 the Arenaton event decision panel, independently of the previous Alpha service.
 
+`serve` now requires PostgreSQL. Set `POLYROVER_DATABASE_URL` in the server
+environment or ignored `.env`; it is never sent to Flutter or printed in errors.
+The server creates its tables on startup using `migrations/001_decisions.sql`.
+Remote connections require TLS with certificate/hostname verification; local
+loopback/Unix sockets can use local authentication. Native TLS uses the system
+certificate store. The Rust server build requires OpenSSL development libraries
+on Linux.
+
+For the prepared local workspace:
+
+```sh
+bash scripts/database.sh start
+mise exec rust@stable -- cargo build --features server
+```
+
+The script uses PostgreSQL 17 (installed with `mise install postgres@17`), stores
+the cluster in `research/postgres`, and listens only on a Unix socket in
+`research/postgres-socket`, port identifier 55432. Peer authentication requires
+the same OS user; no password or publicly exposed database port is needed.
+The local `.env` has the matching `POLYROVER_DATABASE_URL`. For another checkout,
+set `POLYROVER_DATABASE_URL="host=/ABSOLUTE/REPO/research/postgres-socket port=55432 dbname=polyrover user=YOUR_OS_USER"`.
+Use `bash scripts/database.sh status` or `stop` as needed. This is a local setup,
+not an installed boot-time service or a production deployment.
+
 ```sh
 ./target/debug/polyrover serve \
   --data-dir research/decision-api \
@@ -14,17 +38,21 @@ The import is optional and requires an existing local CLI report. Default bind
 is `127.0.0.1:8787`. Flutter sets `POLYROVER_API_BASE_URL` at build time; the old
 `SERVER_POLYROVER_BASE_URL` belongs to a different protocol and is not an alias.
 Production requires a reachable HTTPS reverse proxy, an exact allowed app
-origin and a persistent data directory. This feature does not deploy a server.
+origin and a persistent PostgreSQL deployment. This feature does not deploy a server.
 
 ## HTTP contract
 
 - `GET /health`: API identity and schema.
 - `GET /api/v1/decisions/{market_slug}`: saved state only; never consumes AI quota.
 - `POST /api/v1/decisions/{market_slug}` with `{}`: explicit generation. Returns
-  202 on acceptance, 403 for non-allowlisted markets, 429 for busy/daily cooldown.
+  200 with cached data during its 24-hour lifetime; otherwise 202 on acceptance,
+  403 for non-allowlisted markets, 429 for busy/daily cooldown. Database failures
+  return 503 and never fall back to unrecorded paid generation.
 - Envelope `schema_version: polyrover_decision_v1`, exact `slug`,
   `status: missing | running | ready | failed`, `can_generate`,
   `generation_enabled`, `retry_after_seconds`, `error_code`, nullable `data`.
+- Additive cache fields: `storage: postgresql`, `research_ttl_seconds: 86400`,
+  `cache_hit`; data adds `research_valid_until` and `research_stale`.
 - Data includes advisory action, historical action, forecast band, classifier
   confidence, timestamps, costs, coverage, source links, reasons and limitations.
   Responses use `Cache-Control: no-store` and omit article bodies and secrets.
@@ -34,23 +62,34 @@ Flutter requests the selected market, not the parent event.
 
 ## Storage and recovery
 
-Paths are relative to the process working directory unless absolute:
+PostgreSQL is the authoritative store, queried on every API read. These reads
+do not contact news providers, market APIs or TypeSafe. No process-local cache can
+hide another instance's completed research.
 
-| Path | Contents |
+| Location | Contents |
 | --- | --- |
 | CLI `--output PATH` | One JSON report; refuses overwrite. No file is saved automatically when this flag is omitted. |
 | `research/news-reports/` | Locally saved research/decision reports from previous CLI runs; not a database or an automatic crawler destination. |
-| `research/decision-api/<market_slug>.decision.json` | Latest complete generated/imported report for each market. Replaced atomically on success. |
-| `research/decision-api/job-ledger.json` | Persistent timestamps of generation attempts, including failed attempts. |
+| PostgreSQL `polyrover_predictions` | Append-only history: market slug, generation time, 24-hour expiry, JSONB report, storage time. Latest report selected by generation time. |
+| PostgreSQL `polyrover_research_jobs` | Generation attempts, status, 24-hour retry deadline, job lease and completion time. |
+| `research/decision-api/*.decision.json` and `job-ledger.json` | Previous JSON store, automatically imported on startup, never deleted or written by the new API. |
 
-`--data-dir PATH` overrides the API directory. Existing reports and daily limits
-reload on startup. Current job/failure status is in memory; a restart interrupts
-jobs but does not reset their persisted cooldown. Reports contain source metadata,
-coverage and evaluation results, not a full-text article archive. There is no SQL,
-cloud database, version history or automatic backup. Mount persistent storage and
-back it up; ephemeral containers lose data when their filesystem is replaced.
-Default research directories are gitignored. If overriding the path, keep data
-outside Git and restrict filesystem access to the operator.
+`--data-dir PATH` now selects the **legacy import directory** (default unchanged).
+Import is additive, transactional and idempotent by market/generation timestamp;
+older reports do not replace newer ones. Importing does not reset research age or
+attempt cooldowns. Invalid input aborts startup without deleting files. CLI
+`ai decide-market --output` remains an explicit uncached operator command; only
+the HTTP API enforces this shared cache. Use `--import-report` to add CLI exports.
+
+Reports contain source metadata, coverage, evaluation results, forecasts and
+the prices used, not a full-text article archive. Research expires exactly 24
+hours after its report's generation time, not after its last read. Expiry does
+not delete history or launch a background job; the next explicit POST can request
+new research. GET always returns saved data, marking expired research clearly.
+
+Data, local credentials and PostgreSQL files are excluded from Git and Docker
+build contexts. Mount persistent storage in production and schedule backups
+(for example `pg_dump`); no automatic backup or history-pruning policy is enabled.
 
 ## Paid generation and advisory limits
 
@@ -59,9 +98,12 @@ By default the API is read-only and needs no provider key. Add repeatable
 `TYPESAFE_API_KEY` only in the server environment or ignored `.env`, never in
 Flutter, a URL, source control or browser assets.
 
-Generation is public but bounded: one job globally, one attempt per market per
-24 hours, persisted before provider work, and a 20-minute job timeout. Failures
-count toward the limit. Run **one process per data directory**. CORS is not
+Generation is public but bounded: one job per database/schema, one attempt per
+market per 24 hours, persisted before provider work, and a 20-minute job timeout.
+Successful reports additionally block regeneration for 24 hours from completion.
+Transaction advisory locks serialize reservations across instances; all instances
+must share the same database/schema. Failures count toward the limit. A crashed
+job's 21-minute lease expires without clearing its 24-hour spend gate. CORS is not
 authentication; operators needing private generation must add access controls
 and rate limiting at their proxy. Allowlisting is not an exact currency budget.
 
@@ -79,9 +121,15 @@ order, signs with a wallet or starts trading.
 
 ```sh
 cargo test --locked --features server --test decision_server
+# A dedicated test DB is mandatory for the database integration tests:
+POLYROVER_TEST_DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/polyrover_test' \
+  cargo test --locked --features server --test decision_server -- --include-ignored
 cargo clippy --locked --all-targets --all-features -- -D warnings
 ```
 
 HTTP tests use a deterministic generator and do not spend provider credits or
 prove predictive accuracy. The Flutter repository also contains a read-only
 `tool/polyrover_decision_probe.dart` for checking this real HTTP contract.
+
+Reference: [PostgreSQL transaction advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS)
+and [the async Rust driver](https://docs.rs/tokio-postgres/latest/tokio_postgres/).

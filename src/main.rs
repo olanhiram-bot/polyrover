@@ -729,9 +729,9 @@ fn print_command_help(command: &[String]) -> Result<()> {
 
     let (description, usage, options, example) = match command {
         [command] if command == "serve" => (
-            "Standalone Polyrover decision API for Flutter. Public reads; paid generation only for operator-allowlisted markets, one attempt per market/day and one concurrent job. No orders.",
+            "Standalone Polyrover decision API for Flutter. Requires POLYROVER_DATABASE_URL. PostgreSQL research cache: 24 hours. Public reads; paid generation only for operator-allowlisted markets, one attempt per market/day and one concurrent job. No orders.",
             "serve [--bind <ip:port>] [--data-dir <path>] [--allow-market <slug>] [--allow-origin <origin>] [--import-report <path>]",
-            "  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Dedicated persistent directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
+            "  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Legacy JSON import directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
             "polyrover serve --import-report research/news-reports/psg-decision-v2.json --allow-origin http://localhost:8080",
         ),
         [group, command] if group == "ai" && command == "decide-market" => (

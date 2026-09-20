@@ -1,12 +1,6 @@
 //! Standalone, bounded decision API. Public reads; generation only for an explicit
 //! operator allowlist, at most one attempt per market/day and one job at a time.
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    future::Future,
-    path::{Path, PathBuf},
-    pin::Pin,
-    sync::Arc,
-};
+use std::{collections::BTreeSet, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use crate::{Error, Result};
 use axum::{
@@ -17,28 +11,17 @@ use axum::{
 };
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, set_header::SetResponseHeaderLayer};
 
 pub type Generator =
     Arc<dyn Fn(String) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>> + Send + Sync>;
-const DAY_SECONDS: i64 = 86_400;
 const MAX_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct DecisionService {
-    inner: Arc<Mutex<Stored>>,
-    directory: PathBuf,
+    store: crate::decision_store::Store,
     allowed: BTreeSet<String>,
     generator: Generator,
-}
-
-#[derive(Default)]
-struct Stored {
-    reports: BTreeMap<String, Value>,
-    attempts: BTreeMap<String, i64>,
-    running: Option<String>,
-    failed: BTreeSet<String>,
 }
 
 fn invalid(message: &str) -> Error {
@@ -109,6 +92,7 @@ pub fn project_report(report: &Value, now: DateTime<Utc>) -> Result<Value> {
     }
     Ok(json!({
         "slug":slug,"market_id":market_id,"question":report["question"],"generated_at":generated,
+        "research_valid_until":generated + Duration::hours(24),"research_stale":now >= generated + Duration::hours(24),
         "valid_until":valid_until,"stale":stale,"action":if stale {"wait"} else {action},"reported_action":action,
         "summary":if stale { "Saved analysis; the priced decision has expired. Do not treat old quotes as a current recommendation." } else { report["decision"]["summary_es"].as_str().unwrap_or("") },
         "predicted_outcome":report["forecast"]["predicted_outcome"],"yes_interval":report["forecast"]["yes_interval"],
@@ -141,49 +125,41 @@ fn read_json(path: &Path) -> Result<Value> {
     Ok(serde_json::from_slice(&bytes)?)
 }
 
-fn atomic_json(path: &Path, value: &Value) -> Result<()> {
-    use std::io::Write;
-    let temp = path.with_extension(format!(
-        "{}-{}.tmp",
-        std::process::id(),
-        Utc::now().timestamp_nanos_opt().unwrap_or_default()
-    ));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(|_| invalid("cannot reserve decision storage"))?;
-    file.write_all(&serde_json::to_vec(value)?)
-        .and_then(|_| file.sync_all())
-        .map_err(|_| invalid("cannot persist decision storage"))?;
-    std::fs::rename(&temp, path).map_err(|_| invalid("cannot publish decision storage"))?;
-    Ok(())
-}
-
 impl DecisionService {
-    /// Use a dedicated directory; the API has no file-path parameters.
-    pub fn open(
-        directory: PathBuf,
+    pub async fn connect(
+        database_url: &str,
         allowed: BTreeSet<String>,
         generator: Generator,
     ) -> Result<Self> {
         if allowed.len() > 100 || allowed.iter().any(|s| !valid_slug(s)) {
             return Err(invalid("allowlist requires at most 100 valid slugs"));
         }
-        std::fs::create_dir_all(&directory)
-            .map_err(|_| invalid("cannot create decision directory"))?;
-        let mut stored = Stored::default();
-        let ledger = directory.join("job-ledger.json");
-        if ledger.exists() {
-            stored.attempts = serde_json::from_value(read_json(&ledger)?)?;
+        Ok(Self {
+            store: crate::decision_store::Store::connect(database_url).await?,
+            allowed,
+            generator,
+        })
+    }
+
+    pub async fn import_report(&self, path: &Path) -> Result<()> {
+        let report = unwrap_report(read_json(path)?);
+        project_report(&report, Utc::now())?;
+        self.store.import(&[report], &[]).await
+    }
+
+    /// Import the previous JSON store atomically; files remain untouched.
+    pub async fn import_legacy_directory(&self, directory: &Path) -> Result<()> {
+        if !directory.exists() {
+            return Ok(());
         }
+        let mut reports = Vec::new();
         for entry in
-            std::fs::read_dir(&directory).map_err(|_| invalid("cannot list decision directory"))?
+            std::fs::read_dir(directory).map_err(|_| invalid("cannot list legacy decisions"))?
         {
-            let entry = entry.map_err(|_| invalid("cannot list decision entry"))?;
+            let entry = entry.map_err(|_| invalid("cannot read legacy entry"))?;
             if !entry
                 .file_type()
-                .map_err(|_| invalid("cannot inspect decision entry"))?
+                .map_err(|_| invalid("cannot inspect legacy entry"))?
                 .is_file()
                 || !entry
                     .file_name()
@@ -192,100 +168,78 @@ impl DecisionService {
             {
                 continue;
             }
-            if stored.reports.len() >= 1000 {
-                return Err(invalid("decision store exceeds 1000 reports"));
+            if reports.len() >= 1000 {
+                return Err(invalid("legacy import exceeds 1000 reports"));
             }
-            let report = read_json(&entry.path())?;
-            let projected = project_report(&report, Utc::now())?;
-            stored
-                .reports
-                .insert(projected["slug"].as_str().unwrap().into(), report);
+            let report = unwrap_report(read_json(&entry.path())?);
+            project_report(&report, Utc::now())?;
+            reports.push(report);
         }
-        Ok(Self {
-            inner: Arc::new(Mutex::new(stored)),
-            directory,
-            allowed,
-            generator,
-        })
+        let ledger = directory.join("job-ledger.json");
+        let mut attempts = Vec::new();
+        if ledger.exists() {
+            let values: std::collections::BTreeMap<String, i64> =
+                serde_json::from_value(read_json(&ledger)?)?;
+            for (slug, timestamp) in values {
+                if !valid_slug(&slug) {
+                    return Err(invalid("invalid legacy ledger slug"));
+                }
+                let started = DateTime::from_timestamp(timestamp, 0)
+                    .ok_or_else(|| invalid("invalid legacy timestamp"))?;
+                if started > Utc::now() + Duration::seconds(5) {
+                    return Err(invalid("future legacy attempt"));
+                }
+                attempts.push((slug, started));
+            }
+        }
+        self.store.import(&reports, &attempts).await
     }
 
-    pub async fn import_report(&self, path: &Path) -> Result<()> {
-        let value = read_json(path)?;
-        let report = if value["ok"] == true && value["version"] == "1" {
-            value["data"].clone()
-        } else {
-            value
-        };
-        let projected = project_report(&report, Utc::now())?;
-        let slug = projected["slug"].as_str().unwrap().to_owned();
-        let mut stored = self.inner.lock().await;
-        if stored
-            .reports
-            .get(&slug)
-            .is_some_and(|old| date(&old["generated_at"]) > date(&report["generated_at"]))
-        {
-            return Err(invalid("refusing to replace a newer decision"));
-        }
-        atomic_json(
-            &self.directory.join(format!("{slug}.decision.json")),
-            &report,
-        )?;
-        stored.reports.insert(slug, report);
-        Ok(())
-    }
-
-    async fn snapshot(&self, slug: &str) -> Value {
-        let stored = self.inner.lock().await;
-        let now = Utc::now();
-        let cooldown = stored
-            .attempts
-            .get(slug)
-            .map(|ts| (ts.saturating_add(DAY_SECONDS) - now.timestamp()).max(0))
-            .unwrap_or(0);
-        let running = stored.running.as_deref() == Some(slug);
-        let failed = stored.failed.contains(slug);
+    async fn snapshot(&self, slug: &str) -> Result<Value> {
+        let stored = self.store.snapshot(slug).await?;
         let report = stored
-            .reports
-            .get(slug)
-            .and_then(|r| project_report(r, now).ok());
-        let status = if running {
+            .report
+            .as_ref()
+            .map(|r| project_report(r, stored.now))
+            .transpose()?;
+        let research_fresh = report
+            .as_ref()
+            .is_some_and(|r| r["research_stale"] == false);
+        let status = if stored.running {
             "running"
-        } else if failed {
+        } else if research_fresh {
+            "ready"
+        } else if stored.failed {
             "failed"
         } else if report.is_some() {
             "ready"
         } else {
             "missing"
         };
-        json!({"schema_version":"polyrover_decision_v1","slug":slug,"status":status,
-            "can_generate":self.allowed.contains(slug) && stored.running.is_none() && cooldown == 0,
-            "generation_enabled":self.allowed.contains(slug),"retry_after_seconds":if running {3} else {cooldown},
-            "error_code":if failed {Some("generation_failed")} else {None},"data":report})
+        Ok(
+            json!({"schema_version":"polyrover_decision_v1","slug":slug,"status":status,
+            "storage":"postgresql","research_ttl_seconds":86400,
+            "cache_hit":research_fresh,
+            "can_generate":self.allowed.contains(slug) && !stored.busy && stored.cooldown == 0,
+            "generation_enabled":self.allowed.contains(slug),
+            "retry_after_seconds":if stored.running {3} else {stored.cooldown},
+            "error_code":if stored.failed && !research_fresh {Some("generation_failed")} else {None},"data":report}),
+        )
     }
 
-    async fn start(&self, slug: String) -> std::result::Result<(), StatusCode> {
-        if !self.allowed.contains(&slug) {
-            return Err(StatusCode::FORBIDDEN);
-        }
-        let mut stored = self.inner.lock().await;
-        let now = Utc::now().timestamp();
-        if stored.running.is_some()
-            || stored
-                .attempts
-                .get(&slug)
-                .is_some_and(|ts| now < ts.saturating_add(DAY_SECONDS))
+    async fn start(&self, slug: String) -> std::result::Result<StatusCode, StatusCode> {
+        use crate::decision_store::Reservation;
+        let id = match self
+            .store
+            .reserve(&slug, self.allowed.contains(&slug))
+            .await
+            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
         {
-            return Err(StatusCode::TOO_MANY_REQUESTS);
-        }
-        let mut attempts = stored.attempts.clone();
-        attempts.insert(slug.clone(), now);
-        // Persist the spend gate BEFORE starting any paid request, including failures.
-        atomic_json(&self.directory.join("job-ledger.json"), &json!(attempts))
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        stored.attempts = attempts;
-        stored.running = Some(slug.clone());
-        stored.failed.remove(&slug);
-        drop(stored);
+            Reservation::Cached => return Ok(StatusCode::OK),
+            Reservation::Limited => return Err(StatusCode::TOO_MANY_REQUESTS),
+            Reservation::Forbidden => return Err(StatusCode::FORBIDDEN),
+            Reservation::Started(id) => id,
+        };
         let service = self.clone();
         tokio::spawn(async move {
             let result = tokio::time::timeout(
@@ -297,17 +251,33 @@ impl DecisionService {
                 .ok()
                 .and_then(|r| r.ok())
                 .filter(|r| r["slug"] == slug && project_report(r, Utc::now()).is_ok());
-            let mut stored = service.inner.lock().await;
-            if let Some(report) = report.filter(|r| {
-                atomic_json(&service.directory.join(format!("{slug}.decision.json")), r).is_ok()
-            }) {
-                stored.reports.insert(slug.clone(), report);
-            } else {
-                stored.failed.insert(slug.clone());
+            if service.store.complete(id, report.as_ref()).await.is_err() {
+                eprintln!("Polyrover: could not persist research completion; daily gate retained");
             }
-            stored.running = None;
         });
-        Ok(())
+        Ok(StatusCode::ACCEPTED)
+    }
+}
+
+fn unwrap_report(value: Value) -> Value {
+    if value["ok"] == true && value["version"] == "1" {
+        value["data"].clone()
+    } else {
+        value
+    }
+}
+
+async fn response(
+    service: &DecisionService,
+    slug: &str,
+    status: StatusCode,
+) -> (StatusCode, Json<Value>) {
+    match service.snapshot(slug).await {
+        Ok(value) => (status, Json(value)),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(json!({"error":"decision_database_unavailable"})),
+        ),
     }
 }
 
@@ -344,7 +314,7 @@ async fn read(
             Json(json!({"error":"invalid_slug"})),
         );
     }
-    (StatusCode::OK, Json(service.snapshot(&slug).await))
+    response(&service, &slug, StatusCode::OK).await
 }
 
 async fn generate(
@@ -359,8 +329,8 @@ async fn generate(
         );
     }
     let status = match service.start(slug.clone()).await {
-        Ok(()) => StatusCode::ACCEPTED,
+        Ok(code) => code,
         Err(code) => code,
     };
-    (status, Json(service.snapshot(&slug).await))
+    response(&service, &slug, status).await
 }

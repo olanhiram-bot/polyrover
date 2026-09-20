@@ -196,7 +196,8 @@ bet. See [decision policy](docs/typesafe.md#experimental-decisions).
 ### Standalone decision API for Arenaton
 
 Polyrover can serve its own decisions directly to Flutter; no separate Alpha
-server is required. Build with `cargo build --features server`, then run:
+server is required. Set `POLYROVER_DATABASE_URL` in the server environment or
+ignored `.env`. Build with `cargo build --features server`, then run:
 
 ```bash
 ./target/debug/polyrover serve --allow-origin http://localhost:8080
@@ -206,6 +207,10 @@ This starts a read-only API at `127.0.0.1:8787`. Import an existing CLI report
 with `--import-report PATH`. Enable paid generation explicitly with
 `--allow-market MARKET_SLUG` and a server-side `TYPESAFE_API_KEY`.
 Flutter uses `--dart-define=POLYROVER_API_BASE_URL=http://127.0.0.1:8787`.
+PostgreSQL stores prediction history and reuses research for 24 hours. Repeated
+requests do not call the provider. Quote expiry remains separate (120 seconds).
+For this local workspace, `bash scripts/database.sh start` starts the prepared
+Unix-socket database; `stop` and `status` are also supported.
 See [API, storage and deployment limits](docs/decision-api.md).
 
 ## CLI reference

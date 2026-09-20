@@ -81,13 +81,36 @@ fn rejects_unknown_versions_missing_identity_and_orders() {
     assert!(project_report(&r, Utc::now()).is_err());
 }
 
+#[test]
+fn research_cache_expires_exactly_at_24_hours_independently_of_quotes() {
+    let source = report("boundary");
+    let generated = chrono::DateTime::parse_from_rfc3339(source["generated_at"].as_str().unwrap())
+        .unwrap()
+        .with_timezone(&Utc);
+    let before = project_report(
+        &source,
+        generated + Duration::hours(24) - Duration::milliseconds(1),
+    )
+    .unwrap();
+    assert_eq!(before["research_stale"], false);
+    assert_eq!(before["stale"], true);
+    assert_eq!(before["action"], "wait");
+    assert_eq!(
+        project_report(&source, generated + Duration::hours(24)).unwrap()["research_stale"],
+        true
+    );
+}
+
 #[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL; CI runs PostgreSQL tests explicitly"]
 async fn public_read_cors_generation_and_persistent_daily_spend_gate() {
     let dir = directory();
     let calls = Arc::new(AtomicUsize::new(0));
     let allowed = BTreeSet::from(["test-market".into()]);
-    let service =
-        DecisionService::open(dir.clone(), allowed.clone(), generator(calls.clone())).unwrap();
+    let db = test_database().await;
+    let service = DecisionService::connect(&db, allowed.clone(), generator(calls.clone()))
+        .await
+        .unwrap();
     let (base, task) = server(service).await;
     let http = reqwest::Client::new();
     let url = format!("{base}/api/v1/decisions/test-market");
@@ -132,7 +155,7 @@ async fn public_read_cors_generation_and_persistent_daily_spend_gate() {
             .await
             .unwrap()
             .status(),
-        429
+        200
     );
     assert_eq!(
         http.post(format!("{base}/api/v1/decisions/other"))
@@ -154,7 +177,9 @@ async fn public_read_cors_generation_and_persistent_daily_spend_gate() {
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     task.abort();
-    let reopened = DecisionService::open(dir.clone(), allowed, generator(calls.clone())).unwrap();
+    let reopened = DecisionService::connect(&db, allowed, generator(calls.clone()))
+        .await
+        .unwrap();
     let (base, task) = server(reopened).await;
     assert_eq!(
         http.post(format!("{base}/api/v1/decisions/test-market"))
@@ -163,13 +188,14 @@ async fn public_read_cors_generation_and_persistent_daily_spend_gate() {
             .await
             .unwrap()
             .status(),
-        429
+        200
     );
     task.abort();
     std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL; CI runs PostgreSQL tests explicitly"]
 async fn importing_cli_reports_provides_real_read_only_data() {
     let dir = directory();
     let calls = Arc::new(AtomicUsize::new(0));
@@ -179,8 +205,10 @@ async fn importing_cli_reports_provides_real_read_only_data() {
         json!({"ok":true,"version":"1","data":report("imported")}).to_string(),
     )
     .unwrap();
-    let service =
-        DecisionService::open(dir.clone(), BTreeSet::new(), generator(calls.clone())).unwrap();
+    let db = test_database().await;
+    let service = DecisionService::connect(&db, BTreeSet::new(), generator(calls.clone()))
+        .await
+        .unwrap();
     service.import_report(&path).await.unwrap();
     let (base, task) = server(service).await;
     let state: Value = reqwest::get(format!("{base}/api/v1/decisions/imported"))
@@ -194,4 +222,323 @@ async fn importing_cli_reports_provides_real_read_only_data() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     task.abort();
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Each test gets its own schema inside a dedicated TEST database.
+async fn test_database() -> String {
+    let base = std::env::var("POLYROVER_TEST_DATABASE_URL")
+        .expect("set a dedicated POLYROVER_TEST_DATABASE_URL");
+    let (client, connection) = tokio_postgres::connect(&base, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    let schema = format!(
+        "test_{}_{}",
+        std::process::id(),
+        Utc::now().timestamp_nanos_opt().unwrap()
+    );
+    client
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .unwrap();
+    if base.starts_with("postgres://") || base.starts_with("postgresql://") {
+        let mut url = reqwest::Url::parse(&base).unwrap();
+        url.query_pairs_mut()
+            .append_pair("options", &format!("-csearch_path={schema}"));
+        url.to_string()
+    } else {
+        format!("{base} options='-csearch_path={schema}'")
+    }
+}
+
+async fn sql(db: &str, statement: &str) {
+    let (client, connection) = tokio_postgres::connect(db, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    client.batch_execute(statement).await.unwrap();
+}
+
+async fn state(http: &reqwest::Client, url: &str) -> Value {
+    http.get(url).send().await.unwrap().json().await.unwrap()
+}
+
+async fn ready(http: &reqwest::Client, url: &str) -> Value {
+    for _ in 0..100 {
+        let value = state(http, url).await;
+        if value["status"] == "ready" {
+            return value;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("job did not finish");
+}
+
+#[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL"]
+async fn cache_survives_reconnect_and_expiry_generates_once_preserving_history() {
+    let db = test_database().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let allowed = BTreeSet::from(["daily".into()]);
+    let service = DecisionService::connect(&db, allowed.clone(), generator(calls.clone()))
+        .await
+        .unwrap();
+    let (base, task) = server(service).await;
+    let url = format!("{base}/api/v1/decisions/daily");
+    let http = reqwest::Client::new();
+    assert_eq!(
+        http.post(&url)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+    let first = ready(&http, &url).await;
+    assert_eq!(first["cache_hit"], true);
+    assert_eq!(first["can_generate"], false);
+    assert_eq!(first["research_ttl_seconds"], 86400);
+    let generated =
+        chrono::DateTime::parse_from_rfc3339(first["data"]["generated_at"].as_str().unwrap())
+            .unwrap();
+    let expires = chrono::DateTime::parse_from_rfc3339(
+        first["data"]["research_valid_until"].as_str().unwrap(),
+    )
+    .unwrap();
+    assert_eq!((expires - generated).num_seconds(), 86400);
+    for _ in 0..5 {
+        assert_eq!(state(&http, &url).await["data"], first["data"]);
+        assert_eq!(
+            http.post(&url)
+                .json(&json!({}))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    task.abort();
+    let service = DecisionService::connect(&db, allowed, generator(calls.clone()))
+        .await
+        .unwrap();
+    let (base, task) = server(service).await;
+    let url = format!("{base}/api/v1/decisions/daily");
+    assert_eq!(state(&http, &url).await["cache_hit"], true);
+    // Simulate the passage of 24h in the DB without waiting or contacting providers.
+    sql(
+        &db,
+        "UPDATE polyrover_predictions SET generated_at=generated_at-interval '25 hours',
+        research_valid_until=research_valid_until-interval '25 hours',
+        report=jsonb_set(report,'{generated_at}',to_jsonb(generated_at-interval '25 hours'));
+        UPDATE polyrover_research_jobs SET retry_at=clock_timestamp()-interval '1 second'",
+    )
+    .await;
+    let expired = state(&http, &url).await;
+    assert_eq!(expired["cache_hit"], false);
+    assert_eq!(expired["can_generate"], true);
+    assert_eq!(expired["data"]["action"], "wait");
+    assert_eq!(calls.load(Ordering::SeqCst), 1); // GET never starts research.
+    assert_eq!(
+        http.post(&url)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+    ready(&http, &url).await;
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let (client, connection) = tokio_postgres::connect(&db, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM polyrover_predictions", &[])
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 2);
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL"]
+async fn simultaneous_instances_reserve_only_one_paid_job_and_failures_keep_gate() {
+    let db = test_database().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let release = Arc::new(tokio::sync::Notify::new());
+    let gate = release.clone();
+    let fail: Generator = Arc::new(move |_| {
+        counter.fetch_add(1, Ordering::SeqCst);
+        let gate = gate.clone();
+        Box::pin(async move {
+            gate.notified().await;
+            Err(polyrover::Error::Invalid(
+                "synthetic provider failure".into(),
+            ))
+        })
+    });
+    let allowed = BTreeSet::from(["race".into(), "other".into()]);
+    let a = DecisionService::connect(&db, allowed.clone(), fail.clone())
+        .await
+        .unwrap();
+    let b = DecisionService::connect(&db, allowed, fail).await.unwrap();
+    let (base_a, task_a) = server(a).await;
+    let (base_b, task_b) = server(b).await;
+    let http = reqwest::Client::new();
+    let url_a = format!("{base_a}/api/v1/decisions/race");
+    let url_b = format!("{base_b}/api/v1/decisions/race");
+    let (a, b) = tokio::join!(
+        http.post(&url_a).json(&json!({})).send(),
+        http.post(&url_b).json(&json!({})).send()
+    );
+    let mut statuses = [a.unwrap().status().as_u16(), b.unwrap().status().as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [202, 429]);
+    assert_eq!(
+        http.post(format!("{base_b}/api/v1/decisions/other"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    release.notify_one();
+    for _ in 0..100 {
+        if state(&http, &url_b).await["status"] == "failed" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(state(&http, &url_b).await["status"], "failed");
+    assert_eq!(
+        http.post(&url_b)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    task_a.abort();
+    task_b.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL"]
+async fn migration_is_idempotent_preserves_source_files_and_imported_cache() {
+    let db = test_database().await;
+    let dir = directory();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = DecisionService::connect(
+        &db,
+        BTreeSet::from(["imported".into(), "attempted".into()]),
+        generator(calls.clone()),
+    )
+    .await
+    .unwrap();
+    let mut r = report("imported");
+    r["generated_at"] = json!(Utc::now() - Duration::hours(23));
+    r["yes_quote"]["book_timestamp"] = r["generated_at"].clone();
+    let path = dir.join("imported.decision.json");
+    std::fs::write(&path, r.to_string()).unwrap();
+    std::fs::write(
+        dir.join("job-ledger.json"),
+        json!({"attempted":Utc::now().timestamp()}).to_string(),
+    )
+    .unwrap();
+    service.import_legacy_directory(&dir).await.unwrap();
+    service.import_legacy_directory(&dir).await.unwrap();
+    assert!(path.exists());
+    let (base, task) = server(service).await;
+    let http = reqwest::Client::new();
+    let url = format!("{base}/api/v1/decisions/imported");
+    let cached = state(&http, &url).await;
+    assert_eq!(cached["cache_hit"], true);
+    assert_eq!(cached["data"]["action"], "wait"); // research != executable quote lifetime
+    assert_eq!(cached["data"]["research_stale"], false);
+    assert_eq!(cached["can_generate"], false);
+    assert_eq!(
+        http.post(&url)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(
+        http.post(format!("{base}/api/v1/decisions/attempted"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let (client, connection) = tokio_postgres::connect(&db, tokio_postgres::NoTls)
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        connection.await.unwrap();
+    });
+    assert_eq!(
+        client
+            .query_one("SELECT count(*) FROM polyrover_predictions", &[])
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        1
+    );
+    task.abort();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL"]
+async fn unavailable_storage_never_falls_back_to_paid_generation() {
+    let db = test_database().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = DecisionService::connect(
+        &db,
+        BTreeSet::from(["fail-closed".into()]),
+        generator(calls.clone()),
+    )
+    .await
+    .unwrap();
+    // Simulate missing storage inside this test's isolated schema.
+    sql(
+        &db,
+        "ALTER TABLE polyrover_predictions RENAME TO unavailable_predictions",
+    )
+    .await;
+    let (base, task) = server(service).await;
+    let http = reqwest::Client::new();
+    let url = format!("{base}/api/v1/decisions/fail-closed");
+    assert_eq!(http.get(&url).send().await.unwrap().status(), 503);
+    assert_eq!(
+        http.post(&url)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        503
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    task.abort();
 }

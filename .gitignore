@@ -2,6 +2,9 @@
 .env
 /research/news-reports/
 /research/decision-api/
+/research/postgres/
+/research/postgres-socket/
+/research/postgres.log
 
 # Local generated research outputs and vendored source snapshots.
 /research/polymarket-intelligence-tools/*

@@ -24,6 +24,18 @@ jobs:
     name: Format, lint, test, and document
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: polyrover_test
+          POSTGRES_PASSWORD: local-ci-only
+          POSTGRES_DB: polyrover_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U polyrover_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - name: Check out repository
@@ -92,6 +104,11 @@ jobs:
 
       - name: Test all features
         run: cargo test --locked --all-targets --all-features
+
+      - name: Test PostgreSQL persistence and 24-hour cache
+        env:
+          POLYROVER_TEST_DATABASE_URL: postgresql://polyrover_test:local-ci-only@127.0.0.1:5432/polyrover_test
+        run: cargo test --locked --features server --test decision_server -- --include-ignored
 
       - name: Test optional TypeSafe research
         run: cargo test --locked --all-targets --no-default-features --features typesafe

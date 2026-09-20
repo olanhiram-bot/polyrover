@@ -65,7 +65,9 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
             async move { super::decision_cli::evaluate(&client, &["--slug".into(), slug]).await },
         )
     });
-    let service = DecisionService::open(directory, allowed, generator)?;
+    let database_url = database_url()?;
+    let service = DecisionService::connect(&database_url, allowed, generator).await?;
+    service.import_legacy_directory(&directory).await?;
     for path in imports {
         service.import_report(&path).await?;
     }
@@ -81,4 +83,43 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
     axum::serve(listener, decision_server::router(service, origins))
         .await
         .map_err(|e| Error::Invalid(e.to_string()))
+}
+
+/// Read only the named setting; do not execute .env as shell code or echo secrets.
+fn database_url() -> Result<String> {
+    const NAME: &str = "POLYROVER_DATABASE_URL";
+    if let Ok(value) = std::env::var(NAME) {
+        if !value.trim().is_empty() {
+            return Ok(value);
+        }
+        return Err(Error::Invalid("POLYROVER_DATABASE_URL is empty".into()));
+    }
+    let contents = std::fs::read_to_string(".env").unwrap_or_default();
+    let mut found = None;
+    for line in contents.lines() {
+        let line = line.trim().strip_prefix("export ").unwrap_or(line.trim());
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        if name.trim() != NAME {
+            continue;
+        }
+        if found.is_some() {
+            return Err(Error::Invalid(
+                "duplicate POLYROVER_DATABASE_URL in .env".into(),
+            ));
+        }
+        let value = value.trim();
+        found = Some(
+            value
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
+                .unwrap_or(value)
+                .to_owned(),
+        );
+    }
+    found.filter(|v| !v.is_empty()).ok_or_else(|| {
+        Error::Invalid("set POLYROVER_DATABASE_URL in the server environment or .env".into())
+    })
 }
