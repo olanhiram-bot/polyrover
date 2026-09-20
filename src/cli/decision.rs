@@ -10,6 +10,10 @@ use polyrover::{
 use serde_json::json;
 
 pub async fn run(client: &Client, args: &[String]) -> Result<()> {
+    super::print_success("ai decide-market", evaluate(client, args).await?)
+}
+
+pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Value> {
     let options = Options::parse(args)?;
     let evaluator = super::typesafe_cli::evaluator(typesafe::Config {
         model: options.model.clone(),
@@ -190,7 +194,7 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
         file.write_all(polyrover::output::success("ai decide-market", &report)?.as_bytes())
             .map_err(|e| Error::Invalid(format!("cannot save decision report: {e}")))?;
     }
-    super::print_success("ai decide-market", report)
+    Ok(report)
 }
 
 struct Options {

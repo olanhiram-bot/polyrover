@@ -4,6 +4,7 @@
 
 ### Added
 
+- Opt-in `server` feature and `serve` command for direct Arenaton Flutter integration: per-market saved decisions, explicit allowlisted generation, persisted daily attempt limits, exact-origin CORS and quote-expiry downgrade to WAIT.
 - `ai decide-market`: end-to-end news research, experimental evidence-grounded forecast bands, fresh ask-depth/fee comparison and deterministic `buy_yes` / `buy_no` / `wait` recommendations, with audit reports and no execution.
 - AI CLI commands can read only `TYPESAFE_API_KEY` from the local ignored `.env`, without sourcing shell code; the process environment takes precedence.
 - `ai research-market`: Google News query/locale preservation, all-item publisher retrieval, article-text extraction, lossless TypeSafe chunk evaluations, and source/coverage reports with explicit unread and duplicate articles.

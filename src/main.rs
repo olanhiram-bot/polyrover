@@ -14,6 +14,9 @@ mod decision_cli;
 #[cfg(feature = "typesafe")]
 #[path = "cli/news.rs"]
 mod news_cli;
+#[cfg(feature = "server")]
+#[path = "cli/serve.rs"]
+mod serve_cli;
 #[cfg(feature = "typesafe")]
 #[path = "cli/typesafe.rs"]
 mod typesafe_cli;
@@ -45,6 +48,17 @@ async fn run() -> Result<()> {
         }
         [cmd, rest @ ..] if cmd == "help" => print_command_help(rest),
         [cmd] if cmd == "ping" => ping(&client).await,
+        [cmd, rest @ ..] if cmd == "serve" => {
+            #[cfg(feature = "server")]
+            {
+                serve_cli::run(&client, rest).await
+            }
+            #[cfg(not(feature = "server"))]
+            {
+                let _ = rest;
+                Err(Error::Invalid("serve requires --features server".into()))
+            }
+        }
         [group, cmd, rest @ ..] if group == "ai" && cmd == "decide-market" => {
             #[cfg(feature = "typesafe")]
             {
@@ -674,6 +688,8 @@ fn print_help() {
     println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping                       Check API health\n    gamma search               Search Gamma markets, events, and profiles\n    gamma markets              List Gamma markets\n    gamma market-page          Fetch one keyset-paginated market page\n    gamma events               List Gamma events\n    gamma event-page           Fetch one keyset-paginated event page\n    clob book                  Fetch an order book\n    clob price                 Fetch a side price\n    clob fee-rate              Fetch a token's base fee in bps\n    clob fees                  Show order types and the documented fee schedule\n    clob simulate              Estimate a fill, optionally including taker fees\n    clob price-history         Fetch one token's historical price series\n    clob batch-price-history   Fetch up to 20 historical price series\n    analytics positions        Fetch wallet positions\n    analytics trades           Fetch trades\n    analytics closed-positions Fetch wallet closed positions\n    analytics activity         Fetch wallet activity\n    analytics leaderboard      Fetch the trader leaderboard\n    analytics builder-leaderboard Fetch the aggregated builder leaderboard\n    analytics builder-volume   Fetch daily builder volume history\n\n  Streaming:\n    stream watch               Watch public market events\n\n  Local simulation:\n    sim reset                  Create a fresh paper state\n    sim buy                    Apply a local paper buy\n    sim sell                   Apply a local paper sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.\nOfficial API guide: https://docs.polymarket.com/getting-started/api");
     #[cfg(feature = "typesafe")]
     print!("{ai_help}");
+    #[cfg(feature = "server")]
+    println!("\nOptional decision API:\n  serve              Serve saved decisions and explicitly allowlisted generation");
 }
 
 fn print_command_help(command: &[String]) -> Result<()> {
@@ -712,6 +728,12 @@ fn print_command_help(command: &[String]) -> Result<()> {
     }
 
     let (description, usage, options, example) = match command {
+        [command] if command == "serve" => (
+            "Standalone Polyrover decision API for Flutter. Public reads; paid generation only for operator-allowlisted markets, one attempt per market/day and one concurrent job. No orders.",
+            "serve [--bind <ip:port>] [--data-dir <path>] [--allow-market <slug>] [--allow-origin <origin>] [--import-report <path>]",
+            "  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Dedicated persistent directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
+            "polyrover serve --import-report research/news-reports/psg-decision-v2.json --allow-origin http://localhost:8080",
+        ),
         [group, command] if group == "ai" && command == "decide-market" => (
             "Read Google News, build an experimental forecast, and recommend BUY YES / BUY NO / WAIT. Advisory only: never submits orders. Requires --features typesafe. API key is read from the environment or local .env. All extracted text is assessed; the bounded synthesis reports excluded sources.",
             "ai decide-market (--slug <slug> | --question <text> | --news-url <url>) [options]",

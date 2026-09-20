@@ -15,8 +15,11 @@ execution = ["authenticated", "wallet"]
 bridge = []
 full = ["execution", "bridge"]
 typesafe = ["public", "dep:roxmltree", "dep:scraper", "dep:sha2"]
+server = ["typesafe", "dep:axum", "dep:tower-http"]
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"], optional = true }
+tower-http = { version = "0.6", features = ["cors", "set-header"], optional = true }
 base64 = { version = "0.22", optional = true }
 chrono = { version = "0.4", features = ["serde"] }
 hex = { version = "0.4", optional = true }

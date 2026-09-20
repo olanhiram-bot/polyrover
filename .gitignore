@@ -1,6 +1,7 @@
 /target/
 .env
 /research/news-reports/
+/research/decision-api/
 
 # Local generated research outputs and vendored source snapshots.
 /research/polymarket-intelligence-tools/*

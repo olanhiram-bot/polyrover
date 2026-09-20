@@ -47,6 +47,9 @@ pub mod data_types;
 #[cfg(feature = "typesafe")]
 #[path = "research/decision.rs"]
 pub mod decision;
+#[cfg(feature = "server")]
+#[path = "api/decision_server.rs"]
+pub mod decision_server;
 pub mod error;
 #[cfg(feature = "public")]
 #[path = "api/gamma.rs"]

@@ -193,6 +193,21 @@ classifier confidence is not the chance of winning. Missing evidence, unclear
 rules, unknown fees or insufficient edge cause an explained `wait`, not a forced
 bet. See [decision policy](docs/typesafe.md#experimental-decisions).
 
+### Standalone decision API for Arenaton
+
+Polyrover can serve its own decisions directly to Flutter; no separate Alpha
+server is required. Build with `cargo build --features server`, then run:
+
+```bash
+./target/debug/polyrover serve --allow-origin http://localhost:8080
+```
+
+This starts a read-only API at `127.0.0.1:8787`. Import an existing CLI report
+with `--import-report PATH`. Enable paid generation explicitly with
+`--allow-market MARKET_SLUG` and a server-side `TYPESAFE_API_KEY`.
+Flutter uses `--dart-define=POLYROVER_API_BASE_URL=http://127.0.0.1:8787`.
+See [API, storage and deployment limits](docs/decision-api.md).
+
 ## CLI reference
 
 | Area                | Commands                                                                                                                                                                            | Purpose                                                     |
@@ -398,6 +413,7 @@ private-key signing, relayer, or bridge-transfer client.
 - **`bridge`** — bridge data types and local validation only; no transfer transport.
 - **`full`** — compiles every surface above; it does not add runtime authority.
 - **`typesafe`** — optional semantic market research through an external TypeSafe API; enabled separately from `full`.
+- **`server`** — standalone decision HTTP API with local persistence; includes `typesafe`, separately from `full`.
 
 </details>
 
