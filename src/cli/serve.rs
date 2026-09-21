@@ -9,11 +9,25 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
     let mut directory = PathBuf::from("research/decision-api");
     let (mut allowed, mut origins, mut imports) = (BTreeSet::new(), Vec::new(), Vec::new());
     let mut seen = BTreeSet::new();
+    let mut all_markets = false;
+    let mut daily_limit = 10;
     let mut args = args.iter();
     while let Some(flag) = args.next() {
+        if flag == "--enable-generation" {
+            if all_markets {
+                return Err(Error::Invalid("duplicate --enable-generation".into()));
+            }
+            all_markets = true;
+            continue;
+        }
         if !matches!(
             flag.as_str(),
-            "--bind" | "--data-dir" | "--allow-market" | "--allow-origin" | "--import-report"
+            "--bind"
+                | "--data-dir"
+                | "--allow-market"
+                | "--allow-origin"
+                | "--import-report"
+                | "--daily-generation-limit"
         ) || (!matches!(
             flag.as_str(),
             "--allow-market" | "--allow-origin" | "--import-report"
@@ -34,6 +48,15 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
                     .map_err(|_| Error::Invalid("invalid bind address".into()))?
             }
             "--data-dir" => directory = value.into(),
+            "--daily-generation-limit" => {
+                daily_limit = value
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|v| (1..=100).contains(v))
+                    .ok_or_else(|| {
+                        Error::Invalid("daily generation limit must be between 1 and 100".into())
+                    })?;
+            }
             "--allow-market" => {
                 allowed.insert(value.clone());
             }
@@ -55,7 +78,7 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
             _ => unreachable!(),
         }
     }
-    if !allowed.is_empty() {
+    if all_markets || !allowed.is_empty() {
         super::typesafe_cli::evaluator(Default::default())?;
     }
     let client = client.clone();
@@ -66,7 +89,14 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
         )
     });
     let database_url = database_url()?;
-    let service = DecisionService::connect(&database_url, allowed, generator).await?;
+    let service = DecisionService::connect_with_generation(
+        &database_url,
+        allowed,
+        all_markets,
+        daily_limit,
+        generator,
+    )
+    .await?;
     service.import_legacy_directory(&directory).await?;
     for path in imports {
         service.import_report(&path).await?;

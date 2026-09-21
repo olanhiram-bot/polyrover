@@ -29,6 +29,7 @@ not an installed boot-time service or a production deployment.
 
 ```sh
 ./target/debug/polyrover serve \
+  --enable-generation \
   --data-dir research/decision-api \
   --allow-origin http://localhost:8080 \
   --import-report research/news-reports/psg-decision-v2.json
@@ -46,7 +47,8 @@ origin and a persistent PostgreSQL deployment. This feature does not deploy a se
 - `GET /api/v1/decisions/{market_slug}`: saved state only; never consumes AI quota.
 - `POST /api/v1/decisions/{market_slug}` with `{}`: explicit generation. Returns
   200 with cached data during its 24-hour lifetime; otherwise 202 on acceptance,
-  403 for non-allowlisted markets, 429 for busy/daily cooldown. Database failures
+  403 when generation is disabled/restricted, 429 for busy/daily limits. Repeated
+  requests for an already running market return 202 for the same job. Database failures
   return 503 and never fall back to unrecorded paid generation.
 - Envelope `schema_version: polyrover_decision_v1`, exact `slug`,
   `status: missing | running | ready | failed`, `can_generate`,
@@ -93,18 +95,31 @@ build contexts. Mount persistent storage in production and schedule backups
 
 ## Paid generation and advisory limits
 
-By default the API is read-only and needs no provider key. Add repeatable
-`--allow-market EXACT_SLUG` options to enable at most 100 markets. Set
+By default the bare `serve` command is read-only and needs no provider key.
+Use `--enable-generation` to let Arenaton generate any selected market without
+per-market operator approval. The local workflow is `bash scripts/serve-local.sh`:
+it starts PostgreSQL, builds Polyrover, and enables generation on loopback with
+the exact localhost Flutter origins. Opening an event performs GET only; the
+user must press Generate to start missing/expired research. If the research is
+already cached for less than 24 hours, POST returns it without provider calls.
+Duplicate clicks during a running job reuse that job.
+
+For intentionally restricted deployments, omit `--enable-generation` and add
+repeatable `--allow-market EXACT_SLUG` options (at most 100 markets). Set
 `TYPESAFE_API_KEY` only in the server environment or ignored `.env`, never in
 Flutter, a URL, source control or browser assets.
 
-Generation is public but bounded: one job per database/schema, one attempt per
+Generation is public but bounded: by default **10 new attempts per rolling 24
+hours across all markets**, one job per database/schema, one attempt per
 market per 24 hours, persisted before provider work, and a 20-minute job timeout.
 Successful reports additionally block regeneration for 24 hours from completion.
+`--daily-generation-limit 1..100` configures the global cap; the local launcher
+also accepts `POLYROVER_DAILY_GENERATION_LIMIT`. Failed attempts count; cached
+reads and POSTs do not. This is an attempt cap, not a precise currency budget.
 Transaction advisory locks serialize reservations across instances; all instances
-must share the same database/schema. Failures count toward the limit. A crashed
+must share the same database/schema and cap configuration. A crashed
 job's 21-minute lease expires without clearing its 24-hour spend gate. CORS is not
-authentication; operators needing private generation must add access controls
+authentication; before exposing all-market generation publicly, add access controls
 and rate limiting at their proxy. Allowlisting is not an exact currency budget.
 
 Priced decisions expire within 120 seconds and cannot outlive the selected buy

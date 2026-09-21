@@ -4,6 +4,7 @@
 
 ### Added
 
+- App-initiated generation for any market with `serve --enable-generation`, idempotent running-job reuse, and a configurable database-backed rolling daily attempt cap (default 10); fresh-cache requests remain free of provider calls.
 - PostgreSQL prediction history and shared 24-hour research cache; transactional generation reservations across instances, persisted failures, additive JSON migration, and local peer-authenticated database setup. Fresh-cache POSTs return saved results without provider calls.
 - Opt-in `server` feature and `serve` command for direct Arenaton Flutter integration: per-market saved decisions, explicit allowlisted generation, persisted daily attempt limits, exact-origin CORS and quote-expiry downgrade to WAIT.
 - `ai decide-market`: end-to-end news research, experimental evidence-grounded forecast bands, fresh ask-depth/fee comparison and deterministic `buy_yes` / `buy_no` / `wait` recommendations, with audit reports and no execution.

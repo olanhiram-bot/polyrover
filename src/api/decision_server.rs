@@ -1,5 +1,5 @@
 //! Standalone, bounded decision API. Public reads; generation only for an explicit
-//! operator allowlist, at most one attempt per market/day and one job at a time.
+//! operator policy, at most one attempt per market/day and one job at a time.
 use std::{collections::BTreeSet, future::Future, path::Path, pin::Pin, sync::Arc};
 
 use crate::{Error, Result};
@@ -21,6 +21,8 @@ const MAX_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 pub struct DecisionService {
     store: crate::decision_store::Store,
     allowed: BTreeSet<String>,
+    all_markets: bool,
+    daily_limit: u32,
     generator: Generator,
 }
 
@@ -131,12 +133,28 @@ impl DecisionService {
         allowed: BTreeSet<String>,
         generator: Generator,
     ) -> Result<Self> {
+        Self::connect_with_generation(database_url, allowed, false, 10, generator).await
+    }
+
+    /// Enable app-initiated generation without a per-market operator allowlist.
+    pub async fn connect_with_generation(
+        database_url: &str,
+        allowed: BTreeSet<String>,
+        all_markets: bool,
+        daily_limit: u32,
+        generator: Generator,
+    ) -> Result<Self> {
+        if !(1..=100).contains(&daily_limit) {
+            return Err(invalid("daily generation limit must be between 1 and 100"));
+        }
         if allowed.len() > 100 || allowed.iter().any(|s| !valid_slug(s)) {
             return Err(invalid("allowlist requires at most 100 valid slugs"));
         }
         Ok(Self {
             store: crate::decision_store::Store::connect(database_url).await?,
             allowed,
+            all_markets,
+            daily_limit,
             generator,
         })
     }
@@ -196,7 +214,7 @@ impl DecisionService {
     }
 
     async fn snapshot(&self, slug: &str) -> Result<Value> {
-        let stored = self.store.snapshot(slug).await?;
+        let stored = self.store.snapshot(slug, self.daily_limit).await?;
         let report = stored
             .report
             .as_ref()
@@ -220,8 +238,9 @@ impl DecisionService {
             json!({"schema_version":"polyrover_decision_v1","slug":slug,"status":status,
             "storage":"postgresql","research_ttl_seconds":86400,
             "cache_hit":research_fresh,
-            "can_generate":self.allowed.contains(slug) && !stored.busy && stored.cooldown == 0,
-            "generation_enabled":self.allowed.contains(slug),
+            "can_generate":self.generation_enabled(slug) && !stored.busy && stored.cooldown == 0,
+            "generation_enabled":self.generation_enabled(slug),
+            "daily_generation_limit":self.daily_limit,
             "retry_after_seconds":if stored.running {3} else {stored.cooldown},
             "error_code":if stored.failed && !research_fresh {Some("generation_failed")} else {None},"data":report}),
         )
@@ -231,11 +250,12 @@ impl DecisionService {
         use crate::decision_store::Reservation;
         let id = match self
             .store
-            .reserve(&slug, self.allowed.contains(&slug))
+            .reserve(&slug, self.generation_enabled(&slug), self.daily_limit)
             .await
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?
         {
             Reservation::Cached => return Ok(StatusCode::OK),
+            Reservation::Running => return Ok(StatusCode::ACCEPTED),
             Reservation::Limited => return Err(StatusCode::TOO_MANY_REQUESTS),
             Reservation::Forbidden => return Err(StatusCode::FORBIDDEN),
             Reservation::Started(id) => id,
@@ -256,6 +276,10 @@ impl DecisionService {
             }
         });
         Ok(StatusCode::ACCEPTED)
+    }
+
+    fn generation_enabled(&self, slug: &str) -> bool {
+        self.all_markets || self.allowed.contains(slug)
     }
 }
 

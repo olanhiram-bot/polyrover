@@ -24,6 +24,7 @@ pub(crate) struct Snapshot {
 
 pub(crate) enum Reservation {
     Cached,
+    Running,
     Started(i64),
     Limited,
     Forbidden,
@@ -82,7 +83,7 @@ impl Store {
         Ok(client)
     }
 
-    pub async fn snapshot(&self, slug: &str) -> Result<Snapshot> {
+    pub async fn snapshot(&self, slug: &str, daily_limit: u32) -> Result<Snapshot> {
         let client = self.client().await?;
         // One statement gives a coherent MVCC snapshot; DB time is authoritative.
         let row = client.query_one(
@@ -92,16 +93,21 @@ impl Store {
              (SELECT MAX(retry_at) FROM polyrover_research_jobs WHERE slug=$1),
              EXISTS(SELECT 1 FROM polyrover_research_jobs WHERE slug=$1 AND status='running' AND lease_until>clock_timestamp()),
              EXISTS(SELECT 1 FROM polyrover_research_jobs WHERE status='running' AND lease_until>clock_timestamp()),
-             (SELECT status FROM polyrover_research_jobs WHERE slug=$1 ORDER BY started_at DESC LIMIT 1)", &[&slug]
+             (SELECT status FROM polyrover_research_jobs WHERE slug=$1 ORDER BY started_at DESC LIMIT 1),
+             (SELECT started_at + interval '24 hours' FROM polyrover_research_jobs
+              WHERE started_at > clock_timestamp() - interval '24 hours'
+              ORDER BY started_at DESC OFFSET $2 LIMIT 1)", &[&slug, &(i64::from(daily_limit)-1)]
         ).await.map_err(unavailable)?;
         let now: DateTime<Utc> = row.get(0);
         let expiry: Option<DateTime<Utc>> = row.get(2);
         let retry: Option<DateTime<Utc>> = row.get(3);
+        let global_retry: Option<DateTime<Utc>> = row.get(7);
         let running = row.get(4);
         let latest: Option<String> = row.get(6);
         let cooldown = expiry
             .into_iter()
             .chain(retry)
+            .chain(global_retry)
             .map(|t| ((t - now).num_milliseconds().max(0) + 999) / 1000)
             .max()
             .unwrap_or(0);
@@ -119,7 +125,12 @@ impl Store {
         })
     }
 
-    pub async fn reserve(&self, slug: &str, allowed: bool) -> Result<Reservation> {
+    pub async fn reserve(
+        &self,
+        slug: &str,
+        allowed: bool,
+        daily_limit: u32,
+    ) -> Result<Reservation> {
         let mut client = self.client().await?;
         let tx = client.transaction().await.map_err(unavailable)?;
         lock(&tx).await?;
@@ -137,11 +148,19 @@ impl Store {
         if !allowed {
             return Ok(Reservation::Forbidden);
         }
+        let running: bool = tx.query_one(
+            "SELECT EXISTS(SELECT 1 FROM polyrover_research_jobs WHERE slug=$1 AND status='running' AND lease_until>$2)",
+            &[&slug, &now],
+        ).await.map_err(unavailable)?.get(0);
+        if running {
+            return Ok(Reservation::Running);
+        }
         let limited: bool = tx
             .query_one(
                 "SELECT EXISTS(SELECT 1 FROM polyrover_research_jobs WHERE
-             (slug=$1 AND retry_at>$2) OR (status='running' AND lease_until>$2))",
-                &[&slug, &now],
+             (slug=$1 AND retry_at>$2) OR (status='running' AND lease_until>$2))
+             OR (SELECT count(*) FROM polyrover_research_jobs WHERE started_at>$2-interval '24 hours') >= $3",
+                &[&slug, &now, &i64::from(daily_limit)],
             )
             .await
             .map_err(unavailable)?

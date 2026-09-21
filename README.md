@@ -200,17 +200,21 @@ server is required. Set `POLYROVER_DATABASE_URL` in the server environment or
 ignored `.env`. Build with `cargo build --features server`, then run:
 
 ```bash
-./target/debug/polyrover serve --allow-origin http://localhost:8080
+./target/debug/polyrover serve --enable-generation --allow-origin http://localhost:8080
 ```
 
-This starts a read-only API at `127.0.0.1:8787`. Import an existing CLI report
-with `--import-report PATH`. Enable paid generation explicitly with
-`--allow-market MARKET_SLUG` and a server-side `TYPESAFE_API_KEY`.
+This lets Arenaton create predictions for any selected market at `127.0.0.1:8787`
+using a server-side `TYPESAFE_API_KEY`. Fresh cached predictions are reused, and
+duplicate requests observe the same job. The default cap is 10 new attempts per
+rolling 24 hours (`--daily-generation-limit`). Omit `--enable-generation` for a
+read-only API, or use `--allow-market MARKET_SLUG` for restricted generation.
+Import existing CLI reports with `--import-report PATH`.
 Flutter uses `--dart-define=POLYROVER_API_BASE_URL=http://127.0.0.1:8787`.
 PostgreSQL stores prediction history and reuses research for 24 hours. Repeated
 requests do not call the provider. Quote expiry remains separate (120 seconds).
 For this local workspace, `bash scripts/database.sh start` starts the prepared
 Unix-socket database; `stop` and `status` are also supported.
+`bash scripts/serve-local.sh` starts both PostgreSQL and the app-enabled API.
 See [API, storage and deployment limits](docs/decision-api.md).
 
 ## CLI reference

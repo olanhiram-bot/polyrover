@@ -689,7 +689,7 @@ fn print_help() {
     #[cfg(feature = "typesafe")]
     print!("{ai_help}");
     #[cfg(feature = "server")]
-    println!("\nOptional decision API:\n  serve              Serve saved decisions and explicitly allowlisted generation");
+    println!("\nOptional decision API:\n  serve              Serve saved decisions and app-initiated generation");
 }
 
 fn print_command_help(command: &[String]) -> Result<()> {
@@ -729,9 +729,9 @@ fn print_command_help(command: &[String]) -> Result<()> {
 
     let (description, usage, options, example) = match command {
         [command] if command == "serve" => (
-            "Standalone Polyrover decision API for Flutter. Requires POLYROVER_DATABASE_URL. PostgreSQL research cache: 24 hours. Public reads; paid generation only for operator-allowlisted markets, one attempt per market/day and one concurrent job. No orders.",
-            "serve [--bind <ip:port>] [--data-dir <path>] [--allow-market <slug>] [--allow-origin <origin>] [--import-report <path>]",
-            "  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Legacy JSON import directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
+            "Standalone Polyrover decision API for Flutter. Requires POLYROVER_DATABASE_URL. PostgreSQL research cache: 24 hours. Public reads; enable app generation with --enable-generation or restrict with --allow-market. One attempt per market/day, one concurrent job, and a shared daily limit. No orders.",
+            "serve [--enable-generation] [--daily-generation-limit <1..100>] [--bind <ip:port>] [--data-dir <path>] [--allow-market <slug>] [--allow-origin <origin>] [--import-report <path>]",
+            "  --enable-generation Allow Arenaton to generate any market, reusing the 24h cache\n  --daily-generation-limit Shared rolling 24h attempt cap (default: 10)\n  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Legacy JSON import directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
             "polyrover serve --import-report research/news-reports/psg-decision-v2.json --allow-origin http://localhost:8080",
         ),
         [group, command] if group == "ai" && command == "decide-market" => (

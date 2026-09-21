@@ -405,7 +405,7 @@ async fn simultaneous_instances_reserve_only_one_paid_job_and_failures_keep_gate
     );
     let mut statuses = [a.unwrap().status().as_u16(), b.unwrap().status().as_u16()];
     statuses.sort();
-    assert_eq!(statuses, [202, 429]);
+    assert_eq!(statuses, [202, 202]); // Both clients observe the same single job.
     assert_eq!(
         http.post(format!("{base_b}/api/v1/decisions/other"))
             .json(&json!({}))
@@ -540,5 +540,96 @@ async fn unavailable_storage_never_falls_back_to_paid_generation() {
         503
     );
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires POLYROVER_TEST_DATABASE_URL"]
+async fn arenaton_can_create_any_market_and_reuses_cache_even_at_daily_limit() {
+    let db = test_database().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let service = DecisionService::connect_with_generation(
+        &db,
+        BTreeSet::new(),
+        true,
+        1,
+        generator(calls.clone()),
+    )
+    .await
+    .unwrap();
+    let (base, task) = server(service).await;
+    let http = reqwest::Client::new();
+    let first = format!("{base}/api/v1/decisions/not-preapproved");
+    let second = format!("{base}/api/v1/decisions/another-market");
+    let missing = state(&http, &first).await;
+    assert_eq!(missing["status"], "missing");
+    assert_eq!(missing["generation_enabled"], true);
+    assert_eq!(missing["can_generate"], true);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        http.post(&first)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        202
+    );
+    let saved = ready(&http, &first).await;
+    assert_eq!(saved["cache_hit"], true);
+    assert_eq!(
+        http.post(&first)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let limited = state(&http, &second).await;
+    assert_eq!(limited["generation_enabled"], true);
+    assert_eq!(limited["can_generate"], false);
+    assert!(limited["retry_after_seconds"].as_i64().unwrap() > 0);
+    assert_eq!(
+        http.post(&second)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    task.abort();
+    // A new instance cannot reset the shared spend limit.
+    let reopened = DecisionService::connect_with_generation(
+        &db,
+        BTreeSet::new(),
+        true,
+        1,
+        generator(calls.clone()),
+    )
+    .await
+    .unwrap();
+    let (base, task) = server(reopened).await;
+    assert_eq!(
+        http.post(format!("{base}/api/v1/decisions/another-market"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        429
+    );
+    assert_eq!(
+        http.post(format!("{base}/api/v1/decisions/not-preapproved"))
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     task.abort();
 }
