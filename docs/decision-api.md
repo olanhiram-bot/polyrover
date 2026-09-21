@@ -148,3 +148,10 @@ prove predictive accuracy. The Flutter repository also contains a read-only
 
 Reference: [PostgreSQL transaction advisory locks](https://www.postgresql.org/docs/current/explicit-locking.html#ADVISORY-LOCKS)
 and [the async Rust driver](https://docs.rs/tokio-postgres/latest/tokio_postgres/).
+
+## Directional diagnostics
+
+The additive fields and methodology marker `directional_v2` are documented in
+[directional decisions](directional-decisions.md). They distinguish a model
+forecast from absent evidence or a closed market, including for legacy cached
+reports. The schema envelope, 24-hour cache and spend gates are unchanged.

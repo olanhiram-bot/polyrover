@@ -63,6 +63,22 @@ fn expiry_never_repeats_a_stale_buy_and_never_exposes_extra_fields() {
 }
 
 #[test]
+fn old_reports_expose_why_the_model_was_not_consulted_without_regeneration() {
+    let mut r = report("test-market");
+    r["forecast"] = json!({"predicted_outcome":"insufficient_evidence","error":"no_current_relevant_articles","evaluation":null});
+    r["evidence_selection"] = json!({"included_ids":[],"excluded":{"a":"context_budget"}});
+    let public = project_report(&r, Utc::now()).unwrap();
+    assert_eq!(public["forecast_status"], "no_eligible_evidence");
+    assert_eq!(public["evidence_omitted_for_size"], 1);
+    assert_eq!(public["analysis_version"], "legacy_v1");
+    r["market_snapshot"] = json!({"closed":true});
+    assert_eq!(
+        project_report(&r, Utc::now()).unwrap()["forecast_status"],
+        "not_applicable"
+    );
+}
+
+#[test]
 fn rejects_unknown_versions_missing_identity_and_orders() {
     for (key, value) in [
         ("rubric_version", json!("unknown")),

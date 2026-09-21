@@ -21,6 +21,12 @@ default build.
 
 ## What Polyrover does
 
+Event decisions now separate a **TypeSafe qualitative outlook** (YES, NO,
+uncertain, insufficient evidence) from the priced buy/wait policy. Closed or
+elapsed markets are checked before paid research, and long evidence is
+synthesized in lossless bounded batches. Existing 24-hour cached reports remain
+intact. See [directional decisions](docs/directional-decisions.md).
+
 | Goal                         | Polyrover surface                                                   |
 | ---------------------------- | ------------------------------------------------------------------- |
 | Find markets and events      | Gamma search and pagination                                         |

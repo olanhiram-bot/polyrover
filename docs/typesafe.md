@@ -1,5 +1,11 @@
 # TypeSafe research integration
 
+The current final decision stage is described in
+[directional decisions](directional-decisions.md): qualitative outlook is
+independent of numerical odds and buy/wait gates, long sources use bounded
+map/reduce, and ineligible markets are checked before paid calls. This supersedes
+the old whole-article context exclusion described in the initial workflow below.
+
 Polyrover combines public Gamma discovery, CLOB books, Data API history, local
 fill simulation, wallet scores, and a versioned JSON CLI. TypeSafe adds a useful
 semantic operation: judging the meaning and completeness of market text.

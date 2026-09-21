@@ -30,6 +30,8 @@ fn forecast(low: f64, high: f64) -> Forecast {
         calibrated: false,
         evaluation: None,
         error: None,
+        reason: None,
+        synthesis_evaluations: vec![],
     }
 }
 fn priced(cost: f64) -> Quote {
@@ -197,10 +199,11 @@ fn forecast_band_is_not_classifier_probability_and_serialization_omits_text() {
                 let Question::Choice { criteria, .. } = q else {
                     panic!()
                 };
-                let chosen = if id == "basis" {
-                    "quantitative_forecasts"
-                } else {
-                    "p1"
+                let chosen = match id.as_str() {
+                    "basis" => "quantitative_forecasts",
+                    "outlook" => "no",
+                    "reason" => "supported_forecast",
+                    _ => "p1",
                 };
                 (
                     id.clone(),
@@ -237,7 +240,7 @@ fn empty_evidence_does_not_pass_coverage() {
 }
 
 #[test]
-fn synthesis_preserves_full_text_and_reports_context_exclusions() {
+fn synthesis_preserves_all_text_in_bounded_batches_instead_of_excluding_long_articles() {
     let mut r = report();
     for (id, text) in [
         ("small", "Complete article".to_owned()),
@@ -255,15 +258,210 @@ fn synthesis_preserves_full_text_and_reports_context_exclusions() {
         r.articles.push(entry);
     }
     let selection = forecast_request(&r, None, "test").unwrap();
-    assert_eq!(selection.included_ids, vec!["small"]);
-    assert_eq!(selection.excluded["large"], "context_budget");
-    assert_eq!(
-        selection.request.state["articles"][0]["text"],
-        "Complete article"
-    );
+    assert!(selection.included_ids.contains(&"small".into()));
+    assert!(selection.included_ids.contains(&"large".into()));
+    assert!(selection.excluded.is_empty());
+    assert!(selection.batches > 1);
+    for entry in &r.articles {
+        let reconstructed: String = selection
+            .requests
+            .iter()
+            .flat_map(|r| r.state["articles"].as_array().unwrap())
+            .filter(|v| v["id"] == entry.article.item.id)
+            .map(|v| v["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(reconstructed, entry.article.text);
+    }
     assert!(selection.state_bytes <= 24_000);
-    assert!(evidence_blockers(&r, &selection, &Policy::default())
+    assert!(!evidence_blockers(&r, &selection, &Policy::default())
         .contains(&"relevant_evidence_omitted_from_synthesis".into()));
+    assert!(!serde_json::to_string(&selection)
+        .unwrap()
+        .contains("Complete article"));
+}
+
+fn directional_response(
+    request: &polyrover::typesafe::Request,
+    direction: &str,
+    confidence: f64,
+) -> Response {
+    Response {
+        model: "test".into(),
+        usage: Usage {
+            input_tokens: 10,
+            output_tokens: 10,
+        },
+        answers: request
+            .questions
+            .iter()
+            .map(|(id, q)| {
+                let Question::Choice { criteria, .. } = q else {
+                    panic!()
+                };
+                let chosen = match id.as_str() {
+                    "outlook" => direction,
+                    "reason" => "observed_facts",
+                    _ => "insufficient",
+                };
+                (
+                    id.clone(),
+                    Answer::Choice {
+                        choice: chosen.into(),
+                        confidence,
+                        probabilities: criteria
+                            .keys()
+                            .map(|k| (k.clone(), if k == chosen { 1.0 } else { 0.0 }))
+                            .collect(),
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn qualitative_directions_do_not_require_or_manufacture_numeric_odds() {
+    let request = forecast_request(&report(), None, "test").unwrap().request;
+    for direction in ["yes", "no", "uncertain", "insufficient_evidence"] {
+        let f = Forecast::from_response(directional_response(&request, direction, 0.9), &request)
+            .unwrap();
+        assert_eq!(f.predicted_outcome, direction);
+        assert_eq!(f.yes_interval, None);
+        assert_eq!(f.basis, "qualitative_evidence");
+        assert_eq!(
+            decide(&f, Some(&priced(0.01)), None, &Policy::default(), vec![])
+                .unwrap()
+                .action,
+            Action::Wait
+        );
+    }
+    let f = Forecast::from_response(directional_response(&request, "yes", 0.4), &request).unwrap();
+    assert_eq!(f.predicted_outcome, "uncertain");
+}
+
+#[tokio::test]
+#[ignore = "one paid TypeSafe smoke call; requires explicit operator opt-in and TYPESAFE_API_KEY"]
+async fn live_directional_contract_smoke() {
+    let mut selection = forecast_request(&report(), None, "jev-latest").unwrap();
+    selection.request.state["question"] =
+        json!("Did the fictional Blue team win the completed test match?");
+    selection.request.state["resolution_rules"] = json!("For this synthetic test, YES means the supplied official fictional match record names Blue as winner; NO means it names Orange as winner. Assess the record within this fictional setting, not the existence of a real match.");
+    selection.request.state["coverage"] =
+        json!({"discovered":1,"evaluated":1,"relevant_articles":1,"unavailable":0});
+    selection.request.state["articles"] = json!([{
+        "id":"synthetic-contract-test", "title":"Synthetic test record, not a real news source",
+        "text":"This is synthetic test evidence. The official fictional competition record states that the Blue team won the completed test match against Orange. The result was confirmed by the test referee. No event probability or statistical forecast was published.",
+        "published_at":Utc::now()
+    }]);
+    selection.requests = vec![selection.request.clone()];
+    let client = polyrover::typesafe::Client::from_env(Default::default()).unwrap();
+    let forecast = synthesize(&selection, &client).await.unwrap();
+    eprintln!(
+        "LIVE SYNTHETIC ANSWERS: {}",
+        serde_json::to_string(&forecast).unwrap()
+    );
+    assert!(forecast.evaluation.is_some());
+    assert_eq!(forecast.predicted_outcome, "yes");
+    assert_eq!(forecast.basis, "qualitative_evidence");
+    assert!(forecast.yes_interval.is_none());
+    eprintln!(
+        "LIVE SYNTHETIC CONTRACT CHECK: model={}, outlook={}, reason={:?}, numeric_odds={:?}",
+        forecast.evaluation.as_ref().unwrap().model,
+        forecast.predicted_outcome,
+        forecast.reason,
+        forecast.yes_interval
+    );
+}
+
+#[test]
+fn eligibility_precedes_provider_calls_and_yields_an_auditable_non_prediction() {
+    let mut m = market();
+    m.closed = true;
+    assert_eq!(
+        market_ineligible_reason(&m, Utc::now()),
+        Some("market_closed")
+    );
+    let r = ineligible_report(&m, &Policy::default(), "market_closed");
+    assert_eq!(r["forecast"]["evaluation"], serde_json::Value::Null);
+    assert_eq!(r["research"]["coverage"]["evaluated"], 0);
+    assert_eq!(r["decision"]["orders_submitted"], 0);
+    m.closed = false;
+    m.active = true;
+    m.end_date.0 = Some((Utc::now() - Duration::days(1)).into());
+    assert_eq!(
+        market_ineligible_reason(&m, Utc::now()),
+        Some("market_deadline_elapsed")
+    );
+    m.end_date.0 = Some((Utc::now() + Duration::days(1)).into());
+    assert_eq!(market_ineligible_reason(&m, Utc::now()), None);
+}
+
+#[test]
+fn article_assessment_receives_rules_and_deadline_without_arbitrary_market_fields() {
+    let mut m = market();
+    m.extra.insert(
+        "description".into(),
+        json!("Exact resolution rules for this year"),
+    );
+    m.extra
+        .insert("private_field".into(), json!("must-not-leak"));
+    let mut request = forecast_request(&report(), None, "test").unwrap().request;
+    polyrover::news_research::add_market_context(&mut request, Some(&m));
+    assert_eq!(
+        request.state["resolution_rules"],
+        "Exact resolution rules for this year"
+    );
+    assert!(!serde_json::to_string(&request)
+        .unwrap()
+        .contains("must-not-leak"));
+}
+
+#[cfg(feature = "server")]
+#[tokio::test]
+async fn synthesis_reduces_every_batch_with_real_typed_http_responses() {
+    use axum::{routing::post, Json, Router};
+    use polyrover::typesafe::{Client, Config, Request};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counted = calls.clone();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/v1/systemone",
+                post(move |Json(request): Json<Request>| {
+                    let counted = counted.clone();
+                    async move {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        Json(directional_response(&request, "yes", 0.92))
+                    }
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let client = Client::new(
+        "local-test-key",
+        Config {
+            base_url: format!("http://{addr}"),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut selection = forecast_request(&report(), None, "test").unwrap();
+    selection.requests = vec![selection.request.clone(), selection.request.clone()];
+    let result = synthesize(&selection, &client).await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 3);
+    assert_eq!(result.synthesis_evaluations.len(), 2);
+    assert_eq!(result.predicted_outcome, "yes");
+    assert_eq!(result.yes_interval, None);
+    task.abort();
 }
 
 #[test]

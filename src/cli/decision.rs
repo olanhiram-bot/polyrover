@@ -15,10 +15,6 @@ pub async fn run(client: &Client, args: &[String]) -> Result<()> {
 
 pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Value> {
     let options = Options::parse(args)?;
-    let evaluator = super::typesafe_cli::evaluator(typesafe::Config {
-        model: options.model.clone(),
-        ..Default::default()
-    })?;
     // Reserve before paid calls. Existing reports are never overwritten.
     let mut output = options
         .output
@@ -58,20 +54,38 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
                 .unwrap(),
         )?
     };
+    // Do not spend provider quota researching an already closed/expired market.
+    if let Some(market) = &market {
+        if let Some(reason) = decision::market_ineligible_reason(market, Utc::now()) {
+            let report = decision::ineligible_report(market, &options.policy, reason);
+            if let Some(file) = &mut output {
+                use std::io::Write;
+                file.write_all(polyrover::output::success("ai decide-market", &report)?.as_bytes())
+                    .map_err(|e| Error::Invalid(format!("cannot save decision report: {e}")))?;
+            }
+            return Ok(report);
+        }
+    }
+    let evaluator = super::typesafe_cli::evaluator(typesafe::Config {
+        model: options.model.clone(),
+        ..Default::default()
+    })?;
     eprintln!(
         "Investigando todas las noticias de la búsqueda; los artículos bloqueados se registrarán."
     );
-    let collection = news::Client::collect(search).await?;
+    let (collection, supplemental_searches) =
+        news::Client::collect_for_forecast(search, options.max_age).await?;
     eprintln!(
         "{} resultados encontrados. Evaluando todo el texto extraído con TypeSafe…",
         collection.articles.len()
     );
-    let research = news_research::research(
+    let research = news_research::research_for_market(
         collection,
         Some(&evaluator),
         &options.model,
         0.8,
         options.max_age,
+        market.as_ref(),
     )
     .await?;
     eprintln!(
@@ -79,13 +93,9 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
         research.coverage.evaluated, research.coverage.unavailable
     );
     let selection = decision::forecast_request(&research, market.as_ref(), &options.model)?;
-    let forecast = if selection.included_ids.is_empty() {
-        Forecast::unavailable("no_current_relevant_articles")
-    } else {
-        match evaluator.evaluate(&selection.request).await {
-            Ok(response) => Forecast::from_response(response, &selection.request)?,
-            Err(error) => Forecast::unavailable(error.to_string()),
-        }
+    let forecast = match decision::synthesize(&selection, &evaluator).await {
+        Ok(forecast) => forecast,
+        Err(error) => Forecast::unavailable(error.to_string()),
     };
     let mut blockers = decision::evidence_blockers(&research, &selection, &options.policy);
     let mut quote_errors = BTreeMap::new();
@@ -169,7 +179,7 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
     )?;
     eprintln!("{}", decision.summary_es);
     let report = json!({
-        "rubric_version":"decision_v1", "generated_at":Utc::now(), "question":research.question,
+        "rubric_version":"decision_v1", "analysis_version":"directional_v2", "generated_at":Utc::now(), "question":research.question,
         "market_id":current_market.as_ref().map(|m| &m.id), "slug":options.slug,
         "market_snapshot":current_market.as_ref().map(|m| json!({
             "id":m.id,"condition_id":m.condition_id,"question":m.question,
@@ -182,6 +192,7 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
         "decision":decision, "forecast":forecast, "policy":options.policy,
         "yes_quote":yes_quote, "no_quote":no_quote, "quote_errors":quote_errors,
         "evidence_selection":selection, "rules_review":rules_review, "research":research,
+        "supplemental_searches":supplemental_searches,
         "limitations":["Experimental, uncalibrated forecast bands; not statistical confidence intervals.",
             "Classifier confidence is not the probability of the event.",
             "Google News is a bounded snapshot; inaccessible articles are not read.",

@@ -92,6 +92,30 @@ pub fn project_report(report: &Value, now: DateTime<Utc>) -> Result<Value> {
     if stale {
         reasons.push(json!("decision_expired_refresh_required"));
     }
+    let market = &report["market_snapshot"];
+    let market_status = if market["closed"] == true || market["archived"] == true {
+        "closed"
+    } else if date(&market["end_date"]).is_some_and(|d| d <= now) {
+        "expired"
+    } else if market["active"] == false || market["accepting_orders"] == false {
+        "not_open"
+    } else {
+        "open_or_unknown"
+    };
+    let forecast_evaluated = report["forecast"]["evaluation"].is_object();
+    let forecast_status = if market_status != "open_or_unknown" {
+        "not_applicable"
+    } else if forecast_evaluated {
+        "evaluated"
+    } else if report["forecast"]["error"] == "no_current_relevant_articles" {
+        "no_eligible_evidence"
+    } else {
+        "evaluation_unavailable"
+    };
+    let exclusions = report["evidence_selection"]["excluded"].as_object();
+    let omitted_for_size = exclusions
+        .map(|e| e.values().filter(|v| *v == "context_budget").count())
+        .unwrap_or(0);
     Ok(json!({
         "slug":slug,"market_id":market_id,"question":report["question"],"generated_at":generated,
         "research_valid_until":generated + Duration::hours(24),"research_stale":now >= generated + Duration::hours(24),
@@ -100,6 +124,13 @@ pub fn project_report(report: &Value, now: DateTime<Utc>) -> Result<Value> {
         "predicted_outcome":report["forecast"]["predicted_outcome"],"yes_interval":report["forecast"]["yes_interval"],
         "classifier_confidence":report["forecast"]["classifier_confidence"],"calibrated":false,"experimental":true,
         "model":report["forecast"]["evaluation"]["model"],"reasons":reasons,
+        "analysis_version":report["analysis_version"].as_str().unwrap_or("legacy_v1"),
+        "market_status":market_status,"forecast_status":forecast_status,
+        "forecast_reason":report["forecast"]["reason"],
+        "forecast_basis":report["forecast"]["basis"],
+        "evidence_used":report["evidence_selection"]["included_ids"].as_array().map(Vec::len).unwrap_or(0),
+        "evidence_omitted_for_size":omitted_for_size,
+        "stale_sources":report["research"]["coverage"]["stale_or_undated"].as_array().map(Vec::len).unwrap_or(0),
         "coverage":report["research"]["coverage"],"sources":sources,
         "yes_quote":public_quote(&report["yes_quote"]),"no_quote":public_quote(&report["no_quote"]),
         "limitations":report["limitations"],"orders_submitted":0

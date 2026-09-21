@@ -156,6 +156,38 @@ pub struct Collection {
 pub struct Client;
 
 impl Client {
+    /// Keep the exact-question snapshot and, only when it has no readable recent
+    /// source, try the same query with Google's recency operator. Never replace
+    /// old evidence silently or claim this bounded search is exhaustive.
+    pub async fn collect_for_forecast(
+        search: Search,
+        max_age_days: u32,
+    ) -> Result<(Collection, Vec<String>)> {
+        let mut collection = Self::collect(search.clone()).await?;
+        let now = Utc::now();
+        let has_recent = collection.articles.iter().any(|a| {
+            a.status == ReadStatus::Extracted
+                && a.item.published_at.is_some_and(|d| {
+                    d <= now + chrono::Duration::hours(24)
+                        && now - d <= chrono::Duration::days(max_age_days.into())
+                })
+        });
+        if has_recent {
+            return Ok((collection, Vec::new()));
+        }
+        let mut recent = search;
+        recent.query = format!("{} when:{}d", recent.query, max_age_days);
+        let url = recent.url(false)?.to_string();
+        // A failed supplementary read must not erase the original collection.
+        match Self::collect(recent).await {
+            Ok(extra) => {
+                merge_collection(&mut collection, extra);
+                Ok((collection, vec![url]))
+            }
+            Err(_) => Ok((collection, vec![format!("{url} [unavailable]")])),
+        }
+    }
+
     /// All feed items are attempted, with at most three articles in flight.
     pub async fn collect(search: Search) -> Result<Collection> {
         let feed_url = search.url(true)?;
@@ -187,6 +219,43 @@ impl Client {
             provider_may_be_capped: articles.len() >= 100,
             articles,
         })
+    }
+}
+
+fn merge_collection(collection: &mut Collection, extra: Collection) {
+    collection.provider_may_be_capped |= extra.provider_may_be_capped;
+    let mut hashes: BTreeMap<String, String> = collection
+        .articles
+        .iter()
+        .filter(|a| a.status == ReadStatus::Extracted)
+        .filter_map(|a| a.content_sha256.clone().map(|h| (h, a.item.id.clone())))
+        .collect();
+    for mut article in extra.articles {
+        if collection
+            .articles
+            .iter()
+            .any(|a| a.item.google_url == article.item.google_url)
+        {
+            continue;
+        }
+        article.item.id = format!("article-{:03}", collection.articles.len() + 1);
+        if article.status == ReadStatus::Duplicate {
+            // Secondary IDs are local to that feed; resolve by content hash.
+            article.duplicate_of = article
+                .content_sha256
+                .as_ref()
+                .and_then(|h| hashes.get(h).cloned());
+        }
+        if let Some(hash) = &article.content_sha256 {
+            if let Some(original) = hashes.get(hash) {
+                article.status = ReadStatus::Duplicate;
+                article.duplicate_of = Some(original.clone());
+                article.text.clear();
+            } else if article.status == ReadStatus::Extracted {
+                hashes.insert(hash.clone(), article.item.id.clone());
+            }
+        }
+        collection.articles.push(article);
     }
 }
 
@@ -621,6 +690,30 @@ fn article_bodies(value: &Value, bodies: &mut Vec<String>, paywalled: &mut bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn supplementary_search_keeps_original_question_and_deduplicates_with_stable_ids() {
+        let collection = |url: &str| -> Collection {
+            serde_json::from_value(json!({"search":{"query":"Exact event?","hl":"en-US","gl":"US","ceid":"US:en"},
+                "search_url":"https://news.google.com/search?q=Exact+event", "feed_url":"https://news.google.com/rss/search?q=Exact+event",
+                "retrieved_at":Utc::now(),"provider_snapshot_only":true,"provider_may_be_capped":false,
+                "articles":[{"id":"article-001","title":"Source","google_url":url,"publisher":"Test","publisher_url":"https://example.test",
+                    "published_at":Utc::now(),"final_url":url,"retrieved_at":Utc::now(),"status":"extracted","error":null,
+                    "duplicate_of":null,"extraction_method":"article","content_sha256":"same-content","characters":50,"publisher_completeness_verified":false}]})).unwrap()
+        };
+        let mut original = collection("https://example.test/a");
+        merge_collection(&mut original, collection("https://example.test/a"));
+        assert_eq!(original.articles.len(), 1);
+        merge_collection(&mut original, collection("https://example.test/b"));
+        assert_eq!(original.search.query, "Exact event?");
+        assert_eq!(original.articles.len(), 2);
+        assert_eq!(original.articles[1].item.id, "article-002");
+        assert_eq!(
+            original.articles[1].duplicate_of.as_deref(),
+            Some("article-001")
+        );
+        assert_eq!(original.articles[1].status, ReadStatus::Duplicate);
+    }
 
     #[test]
     fn preserves_user_query_and_locale_without_query_injection() {
