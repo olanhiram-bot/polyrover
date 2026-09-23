@@ -2,6 +2,21 @@ use polyrover::{types::Market, typesafe, Client, Error, Result};
 
 /// Environment takes precedence. Read ONLY this key from local .env; never execute shell code.
 pub fn evaluator(config: typesafe::Config) -> Result<typesafe::Client> {
+    let provider = std::env::var("POLYROVER_AI_PROVIDER").unwrap_or_else(|_| "typesafe".into());
+    if provider.eq_ignore_ascii_case("laya") {
+        let mut config = config;
+        if config.model == "jev-latest" {
+            config.model = std::env::var("LAYA_MODEL").unwrap_or_else(|_| "typed-decisions".into());
+        }
+        config.base_url =
+            std::env::var("LAYA_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:8000".into());
+        return typesafe::Client::new_local(config);
+    }
+    if !provider.eq_ignore_ascii_case("typesafe") {
+        return Err(Error::Invalid(
+            "POLYROVER_AI_PROVIDER must be typesafe or laya".into(),
+        ));
+    }
     if std::env::var_os("TYPESAFE_API_KEY").is_some() {
         return typesafe::Client::from_env(config);
     }

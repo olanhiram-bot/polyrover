@@ -16,6 +16,35 @@ The evaluation integration lives in `src/research/typesafe.rs` and uses the
 existing HTTP dependencies. News collection adds optional HTML/RSS parsers. It is a separate client so a
 TypeSafe bearer token never enters a Polymarket request.
 
+## Local Laya provider
+
+Polyrover can use [Laya](https://github.com/NandhaKishorM/laya), a local
+non-autoregressive decision engine, through its compatible `/v1/systemone`
+HTTP server. This is an alternative evaluator, not a replacement for the
+research and decision quality gates. Laya must be calibrated and evaluated on
+Polymarket-specific fixtures before its confidence values are trusted.
+
+Start Laya separately, then select it for the AI commands:
+
+```bash
+POLYROVER_AI_PROVIDER=laya \
+LAYA_BASE_URL=http://127.0.0.1:8000 \
+cargo run --features typesafe -- ai review-market \
+  --market-file examples/typesafe-market.json --json
+```
+
+`LAYA_MODEL` defaults to `typed-decisions` when the selected provider is Laya.
+The Laya client is restricted to loopback HTTP by the same endpoint validation
+used for local test servers and sends no bearer credential. TypeSafe continues
+to use `TYPESAFE_API_KEY` and HTTPS by default. `POLYROVER_AI_PROVIDER` accepts
+only `typesafe` or `laya`.
+
+Laya checkpoints have bounded token contexts. Polyrover's news workflow still
+retains its byte-bounded, lossless article chunks, but a local Laya deployment
+must be tested with the selected checkpoint's context limit; a successful HTTP
+response does not establish forecasting calibration or market-resolution
+accuracy.
+
 ## Implemented workflow
 
 `ai review-market` obtains one market by Gamma slug, or reads one raw market
@@ -56,6 +85,13 @@ Results include the actual model, full distributions, usage, evaluation time,
 market identity, threshold, and rubric version `market_rules_v1`. Store the
 source market snapshot alongside the result when reproducibility matters;
 `jev-latest` is a moving alias, and `--model` accepts an explicit model version.
+
+The review response also includes a separate `opinion` object with
+`outcome: yes | no | uncertain`, a Spanish explanation, and the evaluator's
+confidence. This is a factual assessment of the supplied text, not a forecast,
+market probability, trade signal, or permission to bypass `manual_review`.
+The `route` and its quality-gate reasons remain authoritative for whether the
+market may proceed to research.
 
 ## CLI
 

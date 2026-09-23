@@ -26,42 +26,76 @@ fn market() -> Market {
 
 // Synthetic contract response following https://docs.typesafe.ai/api; no live data.
 fn response(request: &Request) -> Response {
+    let mut answers: BTreeMap<_, _> = request
+        .questions
+        .iter()
+        .map(|(id, question)| {
+            let answer = match question {
+                Question::Choice { criteria, .. } => Answer::Choice {
+                    choice: if id == "opinion" { "yes" } else { "crypto" }.into(),
+                    confidence: 0.95,
+                    probabilities: criteria
+                        .keys()
+                        .map(|k| {
+                            (
+                                k.clone(),
+                                if (id == "opinion" && k == "yes")
+                                    || (id != "opinion" && k == "crypto")
+                                {
+                                    1.0
+                                } else {
+                                    0.0
+                                },
+                            )
+                        })
+                        .collect(),
+                },
+                Question::Score { criteria, .. } => Answer::Score {
+                    score: 3.0,
+                    confidence: 0.95,
+                    legend: criteria
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| (i.to_string(), v.clone()))
+                        .collect(),
+                    probabilities: (0..criteria.len())
+                        .map(|i| (i.to_string(), if i == 3 { 1.0 } else { 0.0 }))
+                        .collect(),
+                },
+                Question::Noul { .. } => Answer::Noul { noul: 0.95 },
+            };
+            (id.clone(), answer)
+        })
+        .collect();
+    if request.state["market"]["description"] == "" {
+        if let Answer::Score {
+            confidence,
+            score,
+            probabilities,
+            ..
+        } = answers.get_mut("resolution_clarity").unwrap()
+        {
+            *confidence = 0.4;
+            *score = 1.5;
+            *probabilities = BTreeMap::from([
+                ("0".into(), 0.25),
+                ("1".into(), 0.25),
+                ("2".into(), 0.25),
+                ("3".into(), 0.25),
+            ]);
+        }
+        answers.insert(
+            "resolution_source_identified".into(),
+            Answer::Noul { noul: 0.5 },
+        );
+    }
     Response {
         model: "jev-test".into(),
         usage: Usage {
             input_tokens: 320,
             output_tokens: 60,
         },
-        answers: request
-            .questions
-            .iter()
-            .map(|(id, question)| {
-                let answer = match question {
-                    Question::Choice { criteria, .. } => Answer::Choice {
-                        choice: "crypto".into(),
-                        confidence: 0.95,
-                        probabilities: criteria
-                            .keys()
-                            .map(|k| (k.clone(), if k == "crypto" { 1.0 } else { 0.0 }))
-                            .collect(),
-                    },
-                    Question::Score { criteria, .. } => Answer::Score {
-                        score: 3.0,
-                        confidence: 0.95,
-                        legend: criteria
-                            .iter()
-                            .enumerate()
-                            .map(|(i, v)| (i.to_string(), v.clone()))
-                            .collect(),
-                        probabilities: (0..criteria.len())
-                            .map(|i| (i.to_string(), if i == 3 { 1.0 } else { 0.0 }))
-                            .collect(),
-                    },
-                    Question::Noul { .. } => Answer::Noul { noul: 0.95 },
-                };
-                (id.clone(), answer)
-            })
-            .collect(),
+        answers,
     }
 }
 
@@ -111,15 +145,60 @@ fn server(
     )
 }
 
+fn server_sequence(requests: usize) -> (Config, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut raw = Vec::new();
+            loop {
+                let mut chunk = [0; 4096];
+                let n = stream.read(&mut chunk).unwrap();
+                assert!(n > 0, "connection closed before complete request");
+                raw.extend_from_slice(&chunk[..n]);
+                if let Some(end) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&raw[..end]).to_lowercase();
+                    let length: usize = headers
+                        .lines()
+                        .find_map(|l| l.strip_prefix("content-length: "))
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    if raw.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            tx.send(String::from_utf8(raw.clone()).unwrap()).unwrap();
+            let separator = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+            let request: Request = serde_json::from_slice(&raw[separator + 4..]).unwrap();
+            let body = serde_json::to_string(&response(&request)).unwrap();
+            write!(stream, "HTTP/1.1 200 Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        }
+    });
+    (
+        Config {
+            base_url: format!("http://{address}"),
+            model: "jev-test".into(),
+            ..Default::default()
+        },
+        rx,
+        handle,
+    )
+}
+
 #[tokio::test]
 async fn review_batches_primitives_authenticates_and_preserves_audit_fields() {
     let mut market = market();
     market
         .extra
         .insert("private_note".into(), json!("never send this"));
-    let request = market_review_request(&market, "jev-test").unwrap();
-    let body = serde_json::to_string(&response(&request)).unwrap();
-    let (config, rx, handle) = server(200, "", body);
+    let (config, rx, handle) = server_sequence(2);
     let review = Client::new("test-secret", config)
         .unwrap()
         .review_market(&market, 0.8)
@@ -138,41 +217,46 @@ async fn review_batches_primitives_authenticates_and_preserves_audit_fields() {
         .contains("authorization: bearer test-secret\r\n"));
     let sent: Value = serde_json::from_str(raw.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(sent["questions"].as_object().unwrap().len(), 3);
+    assert_eq!(review.opinion.outcome, "yes");
     assert_eq!(
         sent["state"]["market"]["description"],
         market.extra["description"]
     );
     assert!(!raw.contains("never send this"));
+    let opinion_raw = rx.recv().unwrap();
+    let opinion_sent: Value =
+        serde_json::from_str(opinion_raw.split_once("\r\n\r\n").unwrap().1).unwrap();
+    assert_eq!(opinion_sent["questions"].as_object().unwrap().len(), 1);
+    assert_eq!(opinion_sent["state"]["evidence"], "");
     handle.join().unwrap();
+}
+
+#[tokio::test]
+async fn local_laya_client_sends_no_bearer_credentials() {
+    let request = market_review_request(&market(), "typed-decisions").unwrap();
+    let body = serde_json::to_string(&response(&request)).unwrap();
+    let (config, rx, handle) = server(200, "", body);
+    let client = Client::new_local(config).unwrap();
+    client.evaluate(&request).await.unwrap();
+    let raw = rx.recv().unwrap().to_lowercase();
+    assert!(!raw.contains("authorization:"));
+    handle.join().unwrap();
+}
+
+#[test]
+fn local_laya_client_rejects_non_loopback_endpoints() {
+    let config = Config {
+        base_url: "https://laya.example.com".into(),
+        ..Config::default()
+    };
+    assert!(Client::new_local(config).is_err());
 }
 
 #[tokio::test]
 async fn missing_rules_and_uncertainty_route_to_manual_review() {
     let mut market = market();
     market.extra.remove("description");
-    let request = market_review_request(&market, "jev-test").unwrap();
-    let mut response = response(&request);
-    if let Answer::Score {
-        confidence,
-        score,
-        probabilities,
-        ..
-    } = response.answers.get_mut("resolution_clarity").unwrap()
-    {
-        *confidence = 0.4;
-        *score = 1.5;
-        *probabilities = BTreeMap::from([
-            ("0".into(), 0.25),
-            ("1".into(), 0.25),
-            ("2".into(), 0.25),
-            ("3".into(), 0.25),
-        ]);
-    }
-    response.answers.insert(
-        "resolution_source_identified".into(),
-        Answer::Noul { noul: 0.5 },
-    );
-    let (config, rx, handle) = server(200, "", serde_json::to_string(&response).unwrap());
+    let (config, rx, handle) = server_sequence(2);
     let review = Client::new("test-secret", config)
         .unwrap()
         .review_market(&market, 0.8)

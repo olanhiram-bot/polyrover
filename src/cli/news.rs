@@ -77,23 +77,39 @@ pub async fn research(client: &Client, args: &[String]) -> Result<()> {
             ..Default::default()
         })?)
     };
+    let market: Option<Market> = if let Some(path) = options.get("--market-file") {
+        let raw = std::fs::read(path)
+            .map_err(|e| Error::Invalid(format!("cannot read market file: {e}")))?;
+        Some(serde_json::from_slice(&raw)?)
+    } else if let Some(slug) = options.get("--slug") {
+        Some(client.market_by_slug(slug).await?)
+    } else {
+        None
+    };
     let search = if let Some(url) = options.get("--news-url") {
         news::Search::from_url(url)?
     } else if let Some(question) = options.get("--question") {
         news::Search::new(*question)?
     } else {
-        let market: Market = if let Some(path) = options.get("--market-file") {
-            let raw = std::fs::read(path)
-                .map_err(|e| Error::Invalid(format!("cannot read market file: {e}")))?;
-            serde_json::from_slice(&raw)?
-        } else {
-            client.market_by_slug(options["--slug"]).await?
-        };
-        news::Search::new(market.question)?
+        news::Search::new(
+            market
+                .as_ref()
+                .map(|market| market.question.clone())
+                .ok_or_else(|| {
+                    Error::Invalid("market is required for this research input".into())
+                })?,
+        )?
     };
     let collection = news::Client::collect(search).await?;
-    let report =
-        news_research::research(collection, evaluator.as_ref(), model, confidence, max_age).await?;
+    let report = news_research::research_for_market(
+        collection,
+        evaluator.as_ref(),
+        model,
+        confidence,
+        max_age,
+        market.as_ref(),
+    )
+    .await?;
     if let Some(file) = &mut output {
         use std::io::Write;
         file.write_all(polyrover::output::success("ai research-market", &report)?.as_bytes())
