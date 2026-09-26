@@ -3,7 +3,7 @@
 
 use std::{collections::BTreeMap, net::IpAddr, time::Duration};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use futures_util::{stream, StreamExt};
 use reqwest::Url;
 use scraper::{Html, Selector};
@@ -335,6 +335,9 @@ pub async fn read_article(item: NewsItem) -> Article {
                 "publisher redirect or Google consent could not be resolved".into(),
             ));
         }
+        if article.item.published_at.is_none() {
+            article.item.published_at = extract_published_at(&html);
+        }
         let (text, method) = extract_article(&html)?;
         article.characters = text.chars().count();
         article.content_sha256 = Some(format!("{:x}", Sha256::digest(text.as_bytes())));
@@ -348,6 +351,53 @@ pub async fn read_article(item: NewsItem) -> Article {
         article.error = Some(error.to_string());
     }
     article
+}
+
+/// RSS dates are often absent or reflect the aggregator timestamp. Prefer
+/// publisher metadata when the feed did not provide a publication date.
+fn extract_published_at(html: &str) -> Option<DateTime<Utc>> {
+    let document = Html::parse_document(html);
+    let selectors = [
+        r#"meta[property="article:published_time"]"#,
+        r#"meta[property="article:published"]"#,
+        r#"meta[name="date"]"#,
+        r#"meta[name="pubdate"]"#,
+        r#"meta[name="publish-date"]"#,
+        r#"meta[itemprop="datePublished"]"#,
+        "time[datetime]",
+    ];
+    for selector in selectors {
+        let Ok(selector) = Selector::parse(selector) else {
+            continue;
+        };
+        for element in document.select(&selector) {
+            let Some(value) = element
+                .value()
+                .attr("content")
+                .or_else(|| element.value().attr("datetime"))
+                .or_else(|| element.text().next())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if let Some(date) = parse_publication_date(value) {
+                return Some(date);
+            }
+        }
+    }
+    None
+}
+
+fn parse_publication_date(value: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_rfc2822(value))
+        .map(|date| date.with_timezone(&Utc))
+        .or_else(|_| {
+            NaiveDate::parse_from_str(value, "%Y-%m-%d")
+                .map(|date| date.and_hms_opt(0, 0, 0).unwrap().and_utc())
+        })
+        .ok()
 }
 
 async fn resolve_google(url: &Url, html: &str) -> Result<Url> {
@@ -443,7 +493,7 @@ fn parse_google_rpc(body: &str) -> Result<Url> {
 }
 
 /// Fetch public HTTPS only. Resolve and pin public IPs separately for each redirect.
-/// No TypeSafe credentials, cookies, or user environment proxy are used here.
+/// No provider credentials, cookies, or user environment proxy are used here.
 async fn fetch(mut url: Url, mut form: Option<String>) -> Result<(Url, String)> {
     for _ in 0..6 {
         validate_url(&url)?;
@@ -747,6 +797,28 @@ mod tests {
         assert!(items[0].published_at.is_some());
         assert_eq!(items[1].google_url, "");
         assert!(parse_feed("<html><body>Blocked</body></html>").is_err());
+    }
+
+    #[test]
+    fn publication_date_parser_accepts_common_publisher_formats() {
+        assert_eq!(
+            parse_publication_date("2026-09-20T07:00:00Z").unwrap(),
+            "2026-09-20T07:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert!(parse_publication_date("Sun, 20 Sep 2026 07:00:00 GMT").is_some());
+        assert!(parse_publication_date("2026-09-20").is_some());
+        assert!(parse_publication_date("not-a-date").is_none());
+    }
+
+    #[test]
+    fn publisher_metadata_fills_missing_feed_date() {
+        let html = r#"<html><head>
+            <meta property="article:published_time" content="2026-09-20T07:00:00Z">
+        </head><body></body></html>"#;
+        assert_eq!(
+            extract_published_at(html).unwrap(),
+            "2026-09-20T07:00:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
     }
 
     #[test]

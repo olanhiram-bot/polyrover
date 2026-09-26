@@ -76,7 +76,7 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
     let (collection, supplemental_searches) =
         news::Client::collect_for_forecast(search, options.max_age).await?;
     eprintln!(
-        "{} resultados encontrados. Evaluando todo el texto extraído con TypeSafe…",
+        "{} resultados encontrados. Evaluando todo el texto extraído con el evaluador local…",
         collection.articles.len()
     );
     let research = news_research::research_for_market(

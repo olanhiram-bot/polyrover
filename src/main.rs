@@ -68,7 +68,7 @@ async fn run() -> Result<()> {
             {
                 let _ = rest;
                 Err(Error::Invalid(
-                    "ai decide-market requires --features typesafe".into(),
+                    "ai decide-market requires the research feature bundle".into(),
                 ))
             }
         }
@@ -81,7 +81,7 @@ async fn run() -> Result<()> {
             {
                 let _ = rest;
                 Err(Error::Invalid(
-                    "ai research-market requires --features typesafe".into(),
+                    "ai research-market requires the research feature bundle".into(),
                 ))
             }
         }
@@ -94,7 +94,7 @@ async fn run() -> Result<()> {
             {
                 let _ = rest;
                 Err(Error::Invalid(
-                    "ai review-market requires a build with --features typesafe".into(),
+                    "ai review-market requires a build with the research feature bundle".into(),
                 ))
             }
         }
@@ -684,7 +684,7 @@ fn print_success<T: serde::Serialize>(command: &str, data: T) -> Result<()> {
 
 fn print_help() {
     #[cfg(feature = "typesafe")]
-    let ai_help = "\nOptional AI research:\n  ai review-market    Classify a market and review resolution rules with TypeSafe\n  ai research-market Read Google News publisher articles and assess their evidence\n  ai decide-market   Experimental BUY YES / BUY NO / WAIT decision with sources and prices\n";
+    let ai_help = "\nOptional AI research (Laya local evaluator by default):\n  ai review-market    Classify a market and review resolution rules\n  ai research-market Read Google News publisher articles and assess their evidence\n  ai decide-market   Experimental BUY YES / BUY NO / WAIT decision with sources and prices\n";
     println!("polyrover async Polymarket CLI\n\nUsage: polyrover <command> [options]\n\nCommands:\n  Public data:\n    ping                       Check API health\n    gamma search               Search Gamma markets, events, and profiles\n    gamma markets              List Gamma markets\n    gamma market-page          Fetch one keyset-paginated market page\n    gamma events               List Gamma events\n    gamma event-page           Fetch one keyset-paginated event page\n    clob book                  Fetch an order book\n    clob price                 Fetch a side price\n    clob fee-rate              Fetch a token's base fee in bps\n    clob fees                  Show order types and the documented fee schedule\n    clob simulate              Estimate a fill, optionally including taker fees\n    clob price-history         Fetch one token's historical price series\n    clob batch-price-history   Fetch up to 20 historical price series\n    analytics positions        Fetch wallet positions\n    analytics trades           Fetch trades\n    analytics closed-positions Fetch wallet closed positions\n    analytics activity         Fetch wallet activity\n    analytics leaderboard      Fetch the trader leaderboard\n    analytics builder-leaderboard Fetch the aggregated builder leaderboard\n    analytics builder-volume   Fetch daily builder volume history\n\n  Streaming:\n    stream watch               Watch public market events\n\n  Local simulation:\n    sim reset                  Create a fresh paper state\n    sim buy                    Apply a local paper buy\n    sim sell                   Apply a local paper sell\n\nGlobal options:\n  --json        Print the versioned JSON envelope\n  -h, --help    Show help\n\nRun `polyrover help <command>` for command-specific usage and examples.\nOfficial API guide: https://docs.polymarket.com/getting-started/api");
     #[cfg(feature = "typesafe")]
     print!("{ai_help}");
@@ -696,7 +696,7 @@ fn print_command_help(command: &[String]) -> Result<()> {
     if let [group] = command {
         let details = match group.as_str() {
             "ai" => Some((
-                "Optional TypeSafe semantic research (requires --features typesafe and TYPESAFE_API_KEY, except --dry-run).",
+                "Optional semantic research (Laya local evaluator by default; legacy TypeSafe requires explicit provider configuration).",
                 "  review-market    Classify a market and assess resolution rules\n  research-market  Read all returned Google News articles and assess evidence\n  decide-market    Experimental forecast and priced recommendation; no execution",
             )),
             "gamma" => Some((
@@ -731,25 +731,25 @@ fn print_command_help(command: &[String]) -> Result<()> {
         [command] if command == "serve" => (
             "Standalone Polyrover decision API for Flutter. Requires POLYROVER_DATABASE_URL. PostgreSQL research cache: 24 hours. Public reads; enable app generation with --enable-generation or restrict with --allow-market. One attempt per market/day, one concurrent job, and a shared daily limit. No orders.",
             "serve [--enable-generation] [--daily-generation-limit <1..100>] [--bind <ip:port>] [--data-dir <path>] [--allow-market <slug>] [--allow-origin <origin>] [--import-report <path>]",
-            "  --enable-generation Allow Arenaton to generate any market, reusing the 24h cache\n  --daily-generation-limit Shared rolling 24h attempt cap (default: 10)\n  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Legacy JSON import directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume TypeSafe quota; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
+            "  --enable-generation Allow Arenaton to generate any market, reusing the 24h cache\n  --daily-generation-limit Shared rolling 24h attempt cap (default: 10)\n  --bind             Default: 127.0.0.1:8787; use a TLS proxy in production\n  --data-dir         Legacy JSON import directory (default: research/decision-api)\n  --allow-market     Repeat for markets allowed to consume evaluator capacity; default read-only\n  --allow-origin     Repeat exact Flutter web origins; no wildcard or credentials\n  --import-report    Import a CLI decision JSON; repeatable\n",
             "polyrover serve --import-report research/news-reports/psg-decision-v2.json --allow-origin http://localhost:8080",
         ),
         [group, command] if group == "ai" && command == "decide-market" => (
-            "Read Google News, build an experimental forecast, and recommend BUY YES / BUY NO / WAIT. Advisory only: never submits orders. Requires --features typesafe. API key is read from the environment or local .env. All extracted text is assessed; the bounded synthesis reports excluded sources.",
+            "Read Google News, build an experimental forecast, and recommend BUY YES / BUY NO / WAIT. Advisory only: never submits orders. Uses the local Laya evaluator by default. All extracted text is assessed; the bounded synthesis reports excluded sources.",
             "ai decide-market (--slug <slug> | --question <text> | --news-url <url>) [options]",
-            "  --slug <slug>         Binary YES/NO market; required for priced buy recommendations\n  --question <text>     Forecast only; no invented market prices\n  --news-url <url>      Exact Google News search; with --slug its query must match\n  --shares <n>          Depth to quote (default: 10)\n  --min-edge <n>        Required edge per share (default: 0.05)\n  --max-age-days <n>    Freshness window, 1..365 (default: 30)\n  --model <name>        Default: jev-latest\n  --output <path>       Save full audit report; refuses overwrite\n",
+            "  --slug <slug>         Binary YES/NO market; required for priced buy recommendations\n  --question <text>     Forecast only; no invented market prices\n  --news-url <url>      Exact Google News search; with --slug its query must match\n  --shares <n>          Depth to quote (default: 10)\n  --min-edge <n>        Required edge per share (default: 0.05)\n  --max-age-days <n>    Freshness window, 1..365 (default: 30)\n  --model <name>        Default: typed-decisions for Laya\n  --output <path>       Save full audit report; refuses overwrite\n",
             "polyrover ai decide-market --slug <market-slug> --shares 10 --output decision.json --json",
         ),
         [group, command] if group == "ai" && command == "research-market" => (
-            "Read every Google News result in the provider snapshot. Extract publisher text, evaluate every extracted chunk, and report unread sources. Requires --features typesafe. Sends article text to TypeSafe unless --collect-only is set.",
+            "Read every Google News result in the provider snapshot. Extract publisher text, evaluate every extracted chunk, and report unread sources. Uses Laya locally by default unless --collect-only is set.",
             "ai research-market (--slug <slug> | --market-file <path> | --news-url <url> | --question <text>) [options]",
-            "  --news-url <url>       Google News /search URL, preserving q/hl/gl/ceid\n  --question <text>      Search this exact question using en-US/US/US:en\n  --slug <slug>          Search a Gamma market question\n  --market-file <path>   Search a local market question\n  --collect-only        Fetch/extract all results without TypeSafe calls\n  --model <name>        Default: jev-latest\n  --min-confidence <n> Default: 0.8\n  --max-age-days <n>    Default: 30; older articles are read but excluded from signal counts\n  --output <path>       Save JSON report; refuses to overwrite\n  TYPESAFE_API_KEY       Required for evaluation\n",
+            "  --news-url <url>       Google News /search URL, preserving q/hl/gl/ceid\n  --question <text>      Search this exact question using en-US/US/US:en\n  --slug <slug>          Search a Gamma market question\n  --market-file <path>   Search a local market question\n  --collect-only        Fetch/extract all results without evaluator calls\n  --model <name>        Default: typed-decisions for Laya\n  --min-confidence <n> Default: 0.8\n  --max-age-days <n>    Default: 30; older articles are read but excluded from signal counts\n  --output <path>       Save JSON report; refuses to overwrite\n",
             "polyrover ai research-market --question 'Will Paris Saint-Germain win the 2026-27 UEFA Champions League Championship?' --output psg-news.json --json",
         ),
         [group, command] if group == "ai" && command == "review-market" => (
-            "Review market resolution rules with TypeSafe. Sends selected market fields to TypeSafe; requires --features typesafe. Research routing only, not an outcome forecast.",
+            "Review market resolution rules with the local Laya evaluator by default. Research routing only, not an outcome forecast.",
             "ai review-market (--slug <slug> | --market-file <path>) [--model <model>] [--min-confidence <0..1>] [--dry-run] [--json]",
-            "  --slug <slug>          Fetch one public Gamma market\n  --market-file <path>   Read one raw Gamma market JSON object\n  --model <model>        TypeSafe model (default: jev-latest)\n  --min-confidence <n>   Choice/Score confidence floor (default: 0.8)\n  --dry-run             Print request without calling TypeSafe; no API key needed\n  TYPESAFE_API_KEY       API key environment variable (required for evaluations)\n",
+            "  --slug <slug>          Fetch one public Gamma market\n  --market-file <path>   Read one raw Gamma market JSON object\n  --model <model>        Laya model (default: typed-decisions)\n  --min-confidence <n>   Choice/Score confidence floor (default: 0.8)\n  --dry-run             Print request without calling the evaluator\n",
             "polyrover ai review-market --market-file market.json --dry-run --json",
         ),
         [command] if command == "ping" => (

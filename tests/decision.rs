@@ -519,6 +519,7 @@ fn dotenv_is_loaded_without_execution_and_environment_takes_precedence() {
         let mut command = Command::new(env!("CARGO_BIN_EXE_polyrover"));
         command
             .current_dir(&path)
+            .env("POLYROVER_AI_PROVIDER", "typesafe")
             .env_remove("TYPESAFE_API_KEY")
             .args(["ai", "review-market", "--market-file", "absent.json"]);
         if let Some(key) = override_key {

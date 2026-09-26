@@ -2,7 +2,7 @@ use polyrover::{types::Market, typesafe, Client, Error, Result};
 
 /// Environment takes precedence. Read ONLY this key from local .env; never execute shell code.
 pub fn evaluator(config: typesafe::Config) -> Result<typesafe::Client> {
-    let provider = std::env::var("POLYROVER_AI_PROVIDER").unwrap_or_else(|_| "typesafe".into());
+    let provider = std::env::var("POLYROVER_AI_PROVIDER").unwrap_or_else(|_| "laya".into());
     if provider.eq_ignore_ascii_case("laya") {
         let mut config = config;
         if config.model == "jev-latest" {

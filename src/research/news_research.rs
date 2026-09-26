@@ -99,7 +99,7 @@ pub fn article_request(
                 "publisher_completeness_verified": false},
         }),
         questions: BTreeMap::from([
-            ("relevance".into(), Question::Noul { instructions: format!("{context}Does this text provide information directly relevant to the exact event in `market_question`?") }),
+            ("relevance".into(), Question::Noul { instructions: format!("{context}Does this text provide evidence relevant to the exact event in `market_question`? For a sports season or championship market, previews, title-race analysis, expert forecasts and quantitative projections about the exact competition, season and team are relevant evidence even when they are opinions; classify their kind separately. Reject another season, competition, team, gender category, or merely incidental mention.") }),
             ("direction".into(), Question::Choice {
                 instructions: format!("{context}What direction does the evidence in this text suggest for `market_question`? This describes the article's claims, not the probability of the outcome."),
                 criteria: [
