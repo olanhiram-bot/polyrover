@@ -49,7 +49,7 @@ pub async fn research(client: &Client, args: &[String]) -> Result<()> {
         .map_err(|_| Error::Invalid("invalid confidence".into()))?;
     let max_age: u32 = options
         .get("--max-age-days")
-        .unwrap_or(&"30")
+        .unwrap_or(&"7")
         .parse()
         .map_err(|_| Error::Invalid("invalid max age".into()))?;
     if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) || max_age == 0 {
@@ -100,13 +100,14 @@ pub async fn research(client: &Client, args: &[String]) -> Result<()> {
                 })?,
         )?
     };
-    let collection = news::Client::collect(search).await?;
+    let (collection, _supplemental_searches, effective_max_age) =
+        news::Client::collect_for_forecast(search, max_age).await?;
     let report = news_research::research_for_market(
         collection,
         evaluator.as_ref(),
         model,
         confidence,
-        max_age,
+        effective_max_age,
         market.as_ref(),
     )
     .await?;

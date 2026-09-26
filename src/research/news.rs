@@ -155,6 +155,8 @@ pub struct Collection {
 
 pub struct Client;
 
+const MIN_RECENT_EXTRACTED: usize = 3;
+
 impl Client {
     /// Keep the exact-question snapshot and, only when it has no readable recent
     /// source, try the same query with Google's recency operator. Never replace
@@ -162,30 +164,44 @@ impl Client {
     pub async fn collect_for_forecast(
         search: Search,
         max_age_days: u32,
-    ) -> Result<(Collection, Vec<String>)> {
+    ) -> Result<(Collection, Vec<String>, u32)> {
         let mut collection = Self::collect(search.clone()).await?;
-        let now = Utc::now();
-        let has_recent = collection.articles.iter().any(|a| {
-            a.status == ReadStatus::Extracted
-                && a.item.published_at.is_some_and(|d| {
-                    d <= now + chrono::Duration::hours(24)
-                        && now - d <= chrono::Duration::days(max_age_days.into())
-                })
-        });
-        if has_recent {
-            return Ok((collection, Vec::new()));
+        let mut supplemental = Vec::new();
+        let mut effective_max_age = max_age_days;
+        let mut windows = vec![max_age_days];
+        if max_age_days < 14 {
+            windows.push(14);
         }
-        let mut recent = search;
-        recent.query = format!("{} when:{}d", recent.query, max_age_days);
-        let url = recent.url(false)?.to_string();
-        // A failed supplementary read must not erase the original collection.
-        match Self::collect(recent).await {
-            Ok(extra) => {
-                merge_collection(&mut collection, extra);
-                Ok((collection, vec![url]))
+        if max_age_days < 30 {
+            windows.push(30);
+        }
+        for window in windows {
+            effective_max_age = window;
+            if recent_extracted_count(&collection, window) >= MIN_RECENT_EXTRACTED {
+                break;
             }
-            Err(_) => Ok((collection, vec![format!("{url} [unavailable]")])),
+            let queries = [
+                format!("{} when:{}d", search.query, window),
+                expanded_query(&search.query, window),
+            ];
+            for query in queries {
+                let mut recent = search.clone();
+                recent.query = query;
+                let url = recent.url(false)?.to_string();
+                match Self::collect(recent).await {
+                    Ok(extra) => {
+                        merge_collection(&mut collection, extra);
+                        supplemental.push(url);
+                    }
+                    Err(_) => supplemental.push(format!("{url} [unavailable]")),
+                }
+                if recent_extracted_count(&collection, window) >= MIN_RECENT_EXTRACTED {
+                    effective_max_age = window;
+                    break;
+                }
+            }
         }
+        Ok((collection, supplemental, effective_max_age))
     }
 
     /// All feed items are attempted, with at most three articles in flight.
@@ -220,6 +236,46 @@ impl Client {
             articles,
         })
     }
+}
+
+fn recent_extracted_count(collection: &Collection, max_age_days: u32) -> usize {
+    let now = Utc::now();
+    collection
+        .articles
+        .iter()
+        .filter(|article| {
+            article.status == ReadStatus::Extracted
+                && article.item.published_at.is_some_and(|date| {
+                    date <= now + chrono::Duration::hours(24)
+                        && now - date <= chrono::Duration::days(max_age_days.into())
+                })
+        })
+        .count()
+}
+
+fn expanded_query(question: &str, window: u32) -> String {
+    let lower = question.to_ascii_lowercase();
+    let political = [
+        "regime",
+        "government",
+        "president",
+        "prime minister",
+        "election",
+        "coup",
+        "country",
+        "minister",
+        "parliament",
+        "senate",
+        "congress",
+    ]
+    .iter()
+    .any(|term| lower.contains(term));
+    let terms = if political {
+        "\"regime change\" OR \"government collapse\" OR \"political transition\""
+    } else {
+        "\"official statement\" OR forecast OR analysis"
+    };
+    format!("{question} ({terms}) when:{window}d")
 }
 
 fn merge_collection(collection: &mut Collection, extra: Collection) {
@@ -786,6 +842,16 @@ mod tests {
         ] {
             assert!(Search::from_url(bad).is_err());
         }
+    }
+
+    #[test]
+    fn expanded_queries_match_the_market_domain() {
+        let political = expanded_query("Will the Iranian regime fall?", 14);
+        assert!(political.contains("regime change"));
+        assert!(political.contains("when:14d"));
+        let sports = expanded_query("Will PSG win the 2026-27 Champions League?", 14);
+        assert!(sports.contains("official statement"));
+        assert!(!sports.contains("government collapse"));
     }
 
     #[test]

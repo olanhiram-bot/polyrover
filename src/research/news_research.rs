@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Duration, Utc};
+use futures_util::{stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -184,28 +185,54 @@ pub async fn research_for_market(
         ],
         articles: Vec::new(),
     };
-    for article in collection.articles {
+    let mut pending = Vec::new();
+    let mut article_data = Vec::new();
+    for (article_index, article) in collection.articles.into_iter().enumerate() {
         let pieces = chunks(&article.text);
         let expected = pieces.len();
-        let mut reviews = Vec::new();
-        if let Some(evaluator) = evaluator {
+        let current = article.item.published_at.is_some_and(|date| {
+            date <= Utc::now() + Duration::hours(24)
+                && Utc::now() - date <= Duration::days(max_age_days as i64)
+        });
+        if evaluator.is_some() && current && article.status == ReadStatus::Extracted {
             for (index, text) in pieces.into_iter().enumerate() {
                 let mut request =
                     article_request(&report.question, &article, text, index, expected, model)?;
                 add_market_context(&mut request, market);
+                pending.push((article_index, index, text.chars().count(), request));
+            }
+        }
+        article_data.push((article, expected));
+    }
+    let mut reviews: Vec<Vec<ChunkReview>> = (0..article_data.len()).map(|_| Vec::new()).collect();
+    if let Some(evaluator) = evaluator {
+        let results = stream::iter(pending.into_iter().map(
+            |(article_index, index, characters, request)| async move {
                 let result = evaluator.evaluate(&request).await;
                 let (evaluation, error) = match result {
                     Ok(value) => (Some(value), None),
                     Err(error) => (None, Some(error.to_string())),
                 };
-                reviews.push(ChunkReview {
-                    index,
-                    characters: text.chars().count(),
-                    evaluation,
-                    error,
-                });
-            }
+                (
+                    article_index,
+                    ChunkReview {
+                        index,
+                        characters,
+                        evaluation,
+                        error,
+                    },
+                )
+            },
+        ))
+        .buffer_unordered(crate::typesafe::laya_concurrency())
+        .collect::<Vec<_>>()
+        .await;
+        for (article_index, review) in results {
+            reviews[article_index].push(review);
         }
+    }
+    for ((article, expected), mut reviews) in article_data.into_iter().zip(reviews) {
+        reviews.sort_by_key(|review| review.index);
         let complete = expected > 0
             && reviews.len() == expected
             && reviews.iter().all(|r| r.evaluation.is_some());

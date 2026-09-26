@@ -123,6 +123,14 @@ pub struct Response {
     pub usage: Usage,
 }
 
+pub fn laya_concurrency() -> usize {
+    std::env::var("POLYROVER_LAYA_CONCURRENCY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .map(|value| value.clamp(1, 32))
+        .unwrap_or(8)
+}
+
 /// Independent HTTP client: TypeSafe credentials never enter Polymarket clients.
 /// Evaluation POSTs are not automatically retried, to avoid duplicate charges.
 #[derive(Clone)]
@@ -234,9 +242,11 @@ impl Client {
     ) -> Result<MarketReview> {
         probability(min_confidence)?;
         let request = market_review_request(market, &self.model)?;
-        let response = self.evaluate(&request).await?;
         let opinion_request = factual_opinion_request(market, &self.model)?;
-        let opinion_response = self.evaluate(&opinion_request).await?;
+        let (response, opinion_response) =
+            tokio::join!(self.evaluate(&request), self.evaluate(&opinion_request),);
+        let response = response?;
+        let opinion_response = opinion_response?;
         build_review(market, response, opinion_response, min_confidence)
     }
 }

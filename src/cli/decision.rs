@@ -73,7 +73,7 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
     eprintln!(
         "Investigando todas las noticias de la búsqueda; los artículos bloqueados se registrarán."
     );
-    let (collection, supplemental_searches) =
+    let (collection, supplemental_searches, effective_max_age) =
         news::Client::collect_for_forecast(search, options.max_age).await?;
     eprintln!(
         "{} resultados encontrados. Evaluando todo el texto extraído con el evaluador local…",
@@ -84,7 +84,7 @@ pub async fn evaluate(client: &Client, args: &[String]) -> Result<serde_json::Va
         Some(&evaluator),
         &options.model,
         0.8,
-        options.max_age,
+        effective_max_age,
         market.as_ref(),
     )
     .await?;
@@ -271,7 +271,7 @@ impl Options {
         policy.validate()?;
         let max_age: u32 = options
             .remove("--max-age-days")
-            .unwrap_or("30".into())
+            .unwrap_or("7".into())
             .parse()
             .map_err(|_| Error::Invalid("invalid max age".into()))?;
         if max_age == 0 || max_age > 365 {

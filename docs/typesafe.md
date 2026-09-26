@@ -223,7 +223,7 @@ to the report. Exact normalized text duplicates point to the first article's
 assessment; syndication with edited text may still appear more than once.
 Distinct publisher hosts measure diversity, not proof of independent reporting.
 
-Articles older than `--max-age-days` (default 30), undated articles, and dates
+Articles older than `--max-age-days` (default 7), undated articles, and dates
 more than one day in the future are read and assessed but excluded from signal
 counts. Only fully assessed articles with relevance at least 0.8 and direction
 confidence at least `--min-confidence` (default 0.8) enter those counts. Mixed

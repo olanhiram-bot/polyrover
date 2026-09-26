@@ -49,7 +49,7 @@ fn report() -> Report {
     serde_json::from_value(json!({"question":"Will X win?","search_url":"https://news.google.com/search?q=test",
         "feed_url":"https://news.google.com/rss/search?q=test","retrieved_at":Utc::now(),
         "rubric_version":"news_evidence_v1","provider_snapshot_only":true,"provider_may_be_capped":false,
-        "min_confidence":0.8,"max_age_days":30,"collect_only":false,"coverage":{
+        "min_confidence":0.8,"max_age_days":7,"collect_only":false,"coverage":{
             "discovered":0,"extracted":0,"unavailable":0,"duplicates":0,"evaluated":0,"evaluation_failures":0,
             "relevant_articles":0,"relevant_publisher_hosts":0,"supports_yes":[],"supports_no":[],"mixed":[],"stale_or_undated":[]},
         "route":"manual_review","reasons":[],"articles":[]})).unwrap()

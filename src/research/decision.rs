@@ -2,6 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
+use futures_util::{stream, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -149,10 +150,10 @@ pub fn forecast_request(
             c.evaluation.as_ref().is_some_and(|r|
             matches!(r.answers.get("relevance"), Some(Answer::Noul { noul }) if *noul >= 0.8))
         });
-        let reason = if !entry.all_extracted_text_evaluated {
-            Some("incomplete_assessment")
-        } else if !fresh {
+        let reason = if !fresh {
             Some("stale_undated_or_future")
+        } else if !entry.all_extracted_text_evaluated {
+            Some("incomplete_assessment")
         } else if !relevant {
             Some("not_directly_relevant")
         } else if article.text.is_empty() {
@@ -297,11 +298,28 @@ pub async fn synthesize(
             return Err(Error::Invalid("forecast_synthesis_budget_exceeded".into()));
         }
         let count = pending.len();
+        let mut responses = stream::iter(pending.into_iter().enumerate().map(
+            |(index, request)| async move {
+                evaluator
+                    .evaluate(&request)
+                    .await
+                    .map(|response| (index, request, response))
+            },
+        ))
+        .buffer_unordered(crate::typesafe::laya_concurrency())
+        .collect::<Vec<_>>()
+        .await;
+        responses.sort_by_key(|result| {
+            result
+                .as_ref()
+                .map(|(index, _, _)| *index)
+                .unwrap_or(usize::MAX)
+        });
         let mut summaries = Vec::new();
-        for (index, request) in pending.iter().enumerate() {
-            let response = evaluator.evaluate(request).await?;
+        for result in responses {
+            let (index, request, response) = result?;
             if count == 1 {
-                let mut forecast = Forecast::from_response(response, request)?;
+                let mut forecast = Forecast::from_response(response, &request)?;
                 if reduced {
                     forecast.yes_interval = None;
                     forecast.basis = "qualitative_evidence".into();
