@@ -21,12 +21,6 @@ default build.
 
 ## What Polyrover does
 
-Event decisions now separate a **TypeSafe qualitative outlook** (YES, NO,
-uncertain, insufficient evidence) from the priced buy/wait policy. Closed or
-elapsed markets are checked before paid research, and long evidence is
-synthesized in lossless bounded batches. Existing 24-hour cached reports remain
-intact. See [directional decisions](docs/directional-decisions.md).
-
 | Goal                         | Polyrover surface                                                   |
 | ---------------------------- | ------------------------------------------------------------------- |
 | Find markets and events      | Gamma search and pagination                                         |
@@ -138,90 +132,6 @@ polyrover clob simulate \
   --fee-category crypto \
   --json
 ```
-
-### Optional TypeSafe market research
-
-Build this checkout with `cargo build --features typesafe`. The `ai review-market`
-command uses [TypeSafe System One](https://docs.typesafe.ai/introduction) to classify
-a market and assess its resolution rules. It returns typed answers, confidence,
-token usage, and a deterministic `research_ready` or `manual_review` route.
-
-Preview the exact request locally, without credentials or API usage:
-
-```bash
-cargo run --features typesafe -- ai review-market \
-  --market-file examples/typesafe-market.json --dry-run --json
-```
-
-For an actual evaluation, set `TYPESAFE_API_KEY` in your environment or in the
-local `.env` (environment takes precedence; the CLI reads only this key and does
-not execute the file). You can copy `.env.example` to `.env` and fill in the key:
-
-```bash
-cargo run --features typesafe -- ai review-market --slug MARKET_SLUG --json
-```
-
-An evaluation sends selected public market fields to TypeSafe and consumes its
-API quota. `--dry-run --slug` still fetches Gamma data; `--dry-run --market-file`
-is fully local. This feature is opt-in, excluded from both `default` and `full`.
-Research readiness describes rule clarity, not investment quality or the
-probability of a market outcome. See [integration design and Rust examples](docs/typesafe.md).
-
-Research current news using the market question or a Google News search URL:
-
-```bash
-cargo run --features typesafe -- ai research-market \
-  --question 'Will Paris Saint-Germain win the 2026-27 UEFA Champions League Championship?' \
-  --output psg-news.json --json
-```
-
-`--news-url 'https://news.google.com/search?q=...&hl=en-US&gl=US&ceid=US:en'`
-preserves the supplied search and locale. Every item in the returned RSS snapshot
-is attempted. Accessible publisher text is evaluated in full across bounded
-chunks; inaccessible pages, exact duplicates, stale articles, and evaluation
-failures remain visible. `--collect-only` fetches/extracts without using TypeSafe.
-Reports contain source links, coverage, and typed judgments, not republished
-article bodies. See [news research](docs/typesafe.md#news-research).
-
-For an end-to-end experimental decision:
-
-```bash
-cargo run --features typesafe -- ai decide-market \
-  --slug MARKET_SLUG --shares 10 --output decision.json --json
-```
-
-The command investigates news, returns a sourced forecast band where numerical
-evidence supports one, refreshes actual ask depth and market-specific fees, and
-outputs `buy_yes`, `buy_no`, or `wait`. No order is submitted. `--question` and
-`--news-url` also work without a market, but only produce a forecast, not a priced
-buy recommendation. These forecasts are **experimental and uncalibrated**;
-classifier confidence is not the chance of winning. Missing evidence, unclear
-rules, unknown fees or insufficient edge cause an explained `wait`, not a forced
-bet. See [decision policy](docs/typesafe.md#experimental-decisions).
-
-### Standalone decision API for Arenaton
-
-Polyrover can serve its own decisions directly to Flutter; no separate Alpha
-server is required. Set `POLYROVER_DATABASE_URL` in the server environment or
-ignored `.env`. Build with `cargo build --features server`, then run:
-
-```bash
-./target/debug/polyrover serve --enable-generation --allow-origin http://localhost:8080
-```
-
-This lets Arenaton create predictions for any selected market at `127.0.0.1:8787`
-using a server-side `TYPESAFE_API_KEY`. Fresh cached predictions are reused, and
-duplicate requests observe the same job. The default cap is 10 new attempts per
-rolling 24 hours (`--daily-generation-limit`). Omit `--enable-generation` for a
-read-only API, or use `--allow-market MARKET_SLUG` for restricted generation.
-Import existing CLI reports with `--import-report PATH`.
-Flutter uses `--dart-define=POLYROVER_API_BASE_URL=http://127.0.0.1:8787`.
-PostgreSQL stores prediction history and reuses research for 24 hours. Repeated
-requests do not call the provider. Quote expiry remains separate (120 seconds).
-For this local workspace, `bash scripts/database.sh start` starts the prepared
-Unix-socket database; `stop` and `status` are also supported.
-`bash scripts/serve-local.sh` starts both PostgreSQL and the app-enabled API.
-See [API, storage and deployment limits](docs/decision-api.md).
 
 ## CLI reference
 
@@ -427,8 +337,6 @@ private-key signing, relayer, or bridge-transfer client.
 - **`execution`** — order and cancellation data types only; no submission transport.
 - **`bridge`** — bridge data types and local validation only; no transfer transport.
 - **`full`** — compiles every surface above; it does not add runtime authority.
-- **`typesafe`** — optional semantic market research through an external TypeSafe API; enabled separately from `full`.
-- **`server`** — standalone decision HTTP API with local persistence; includes `typesafe`, separately from `full`.
 
 </details>
 

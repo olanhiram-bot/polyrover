@@ -44,15 +44,6 @@ pub mod crypto_price;
 pub mod data;
 #[path = "models/data_types.rs"]
 pub mod data_types;
-#[cfg(feature = "typesafe")]
-#[path = "research/decision.rs"]
-pub mod decision;
-#[cfg(feature = "server")]
-#[path = "api/decision_server.rs"]
-pub mod decision_server;
-#[cfg(feature = "server")]
-#[path = "storage/decision_store.rs"]
-mod decision_store;
 pub mod error;
 #[cfg(feature = "public")]
 #[path = "api/gamma.rs"]
@@ -73,12 +64,6 @@ pub mod market_resolver;
 #[cfg(feature = "public")]
 #[path = "research/market_results.rs"]
 pub mod market_results;
-#[cfg(feature = "typesafe")]
-#[path = "research/news.rs"]
-pub mod news;
-#[cfg(feature = "typesafe")]
-#[path = "research/news_research.rs"]
-pub mod news_research;
 #[path = "cli/output.rs"]
 pub mod output;
 #[path = "research/paper.rs"]
@@ -99,9 +84,6 @@ pub mod stream_client;
 pub mod transport;
 #[path = "models/types.rs"]
 pub mod types;
-#[cfg(feature = "typesafe")]
-#[path = "research/typesafe.rs"]
-pub mod typesafe;
 #[cfg(feature = "authenticated")]
 #[path = "streaming/user_stream.rs"]
 pub mod user_stream;
